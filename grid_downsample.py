@@ -3,6 +3,7 @@ import os
 os.environ['OMP_NUM_THREADS'] = '1'
 import argparse
 import sys
+from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
@@ -18,31 +19,7 @@ from color_distillation.utils.buffer_size_counter import BufferSizeCounter
 from color_distillation.utils.image_utils import img_color_denormalize
 
 
-def main():
-    # settings
-    parser = argparse.ArgumentParser(description='Grid-wise down sample')
-    parser.add_argument('--num_colors', type=int, default=None, help='down sample ratio for area')
-    parser.add_argument('--sample_type', type=str, default=None,
-                        choices=['mcut', 'octree', 'kmeans', 'jpeg'])
-    parser.add_argument('--dither', action='store_true', default=False)
-    parser.add_argument('--jpeg_ratio', type=int, default=None)
-    parser.add_argument('--train', action='store_true', default=False)
-    parser.add_argument('-d', '--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
-    parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
-    parser.add_argument('-j', '--num_workers', type=int, default=4)
-    parser.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
-                        help='input batch size for training (default: 128)')
-    parser.add_argument('--epochs', type=int, default=60, metavar='N', help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.1, metavar='LR', help='learning rate (default: 0.1)')
-    parser.add_argument('--step_size', type=int, default=40)
-    parser.add_argument('--weight_decay', type=float, default=5e-4)
-    parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')
-    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
-                        help='how many batches to wait before logging training status')
-    parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
-    args = parser.parse_args()
+def main(args):
 
     # seed
     if args.seed is not None:
@@ -194,7 +171,7 @@ def main():
 
     # learn
     if args.train:
-        for epoch in range(1, args.epochs + 1):
+        for epoch in tqdm(range(1, args.epochs + 1)):
             print('Train on sampled dateset...')
             train_loss, train_prec = trainer.train(epoch, sampled_train_loader, optimizer, args.log_interval, scheduler)
             print('Test on original dateset...')
@@ -232,4 +209,29 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # settings
+    parser = argparse.ArgumentParser(description='Grid-wise down sample')
+    parser.add_argument('--num_colors', type=int, default=None, help='down sample ratio for area')
+    parser.add_argument('--sample_type', type=str, default=None,
+                        choices=['mcut', 'octree', 'kmeans', 'jpeg'])
+    parser.add_argument('--dither', action='store_true', default=False)
+    parser.add_argument('--jpeg_ratio', type=int, default=None)
+    parser.add_argument('--train', action='store_true', default=False)
+    parser.add_argument('-d', '--dataset', type=str, default='cifar10',
+                        choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
+    parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
+    parser.add_argument('-j', '--num_workers', type=int, default=4)
+    parser.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
+                        help='input batch size for training (default: 128)')
+    parser.add_argument('--epochs', type=int, default=60, metavar='N', help='number of epochs to train (default: 10)')
+    parser.add_argument('--lr', type=float, default=0.1, metavar='LR', help='learning rate (default: 0.1)')
+    parser.add_argument('--step_size', type=int, default=40)
+    parser.add_argument('--weight_decay', type=float, default=5e-4)
+    parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')
+    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
+                        help='how many batches to wait before logging training status')
+    parser.add_argument('--visualize', action='store_true')
+    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
+    args = parser.parse_args()
+
+    main(args)

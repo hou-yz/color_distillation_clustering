@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from color_distillation.models.cyclegan import GeneratorResNet
 from color_distillation.models.dncnn import DnCNN
 from color_distillation.models.unet import UNet
 
@@ -12,7 +13,14 @@ class ColorCNN(nn.Module):
         self.soften = soften
         self.color_norm = color_norm
         self.color_jitter = color_jitter
-        self.base = UNet(3) if arch == 'unet' else DnCNN(3)
+        if arch == 'unet':
+            self.base = UNet()
+        elif arch == 'dncnn':
+            self.base = DnCNN()
+        elif arch == 'cyclegan':
+            self.base = GeneratorResNet()
+        else:
+            raise Exception
         self.color_mask = nn.Sequential(nn.Conv2d(self.base.out_channel, 256, 1), nn.ReLU(),
                                         nn.Conv2d(256, num_colors, 1, bias=False))
         self.mask_softmax = nn.Softmax2d()
@@ -38,8 +46,8 @@ class ColorCNN(nn.Module):
 
 def test():
     img = torch.randn([1, 3, 32, 32])
-    model = ColorCNN(3, 128)
+    model = ColorCNN('cyclegan',3, 128)
     transformed_img = model(img)
     pass
 
-# test()
+test()

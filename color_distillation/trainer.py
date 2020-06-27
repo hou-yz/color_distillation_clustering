@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
 from io import BytesIO
+from color_distillation.loss.entropy_loss import HLoss
 
 
 class BaseTrainer(object):
@@ -16,14 +17,15 @@ class BaseTrainer(object):
 
 class CNNTrainer(BaseTrainer):
     def __init__(self, model, criterion, num_colors, classifier=None, denormalizer=None,
-                 alpha=None, beta=None, gamma=None, sample_method=None):
+                 color_appear_ratio=None, confidence_ratio=None, gamma=None, sample_method=None):
         super(BaseTrainer, self).__init__()
         self.model = model
-        self.criterion = criterion
+        self.CE_loss = criterion
+        self.IE_loss = HLoss()
         self.classifier = classifier
         self.denormalizer = denormalizer
-        self.alpha = alpha
-        self.beta = beta
+        self.color_appear_ratio = color_appear_ratio
+        self.confidence_ratio = confidence_ratio
         self.gamma = gamma
         self.reconsturction_loss = nn.MSELoss()
         self.sample_method = sample_method
@@ -48,25 +50,20 @@ class CNNTrainer(BaseTrainer):
                 # regularization
                 B, _, H, W = data.shape
                 prob_max, _ = torch.max(prob.view([B, self.num_colors, -1]), dim=2)
-                prob_mean = torch.mean(prob, dim=[2, 3])
                 avg_max = torch.mean(prob_max)
-                std_mean = torch.mean(prob_mean.std(dim=1))
-                color_contribution = (data.unsqueeze(2) * prob.unsqueeze(1))
-                color_var = ((color_contribution - color_palette).pow(2) *
-                             prob.unsqueeze(1)).sum(dim=[3, 4], keepdim=True) / (
-                                    prob.unsqueeze(1).sum(dim=[3, 4], keepdim=True) + 1e-8)
                 output = self.classifier(transformed_img)
             else:
                 output = self.model(data)
             pred = torch.argmax(output, 1)
             correct += pred.eq(target).sum().item()
             miss += target.shape[0] - pred.eq(target).sum().item()
+            loss = self.CE_loss(output, target)
             if self.color_cnn:
-                loss = self.criterion(output, target) + self.alpha * np.log2(self.num_colors) * (1 - avg_max) + \
-                       self.beta * color_var.mean() + \
-                       self.gamma * self.reconsturction_loss(data, transformed_img)
-            else:
-                loss = self.criterion(output, target)
+                color_appear_loss = np.log2(self.num_colors) * (1 - avg_max)
+                confidence_loss = self.IE_loss(prob)
+                loss += self.color_appear_ratio * color_appear_loss + \
+                        self.confidence_ratio * confidence_loss
+
             loss.backward()
             optimizer.step()
             losses += loss.item()
@@ -86,16 +83,18 @@ class CNNTrainer(BaseTrainer):
         t_epoch = t1 - t0
         print('Train Epoch: {}, Batch:{}, \tLoss: {:.6f}, Prec: {:.1f}%, Time: {:.3f}'.format(
             epoch, len(data_loader), losses / len(data_loader), 100. * correct / (correct + miss), t_epoch))
+        if self.color_cnn:
+            print(f'color_appear_loss: {color_appear_loss.item():.3f}, confidence_loss: {confidence_loss.item():.3f}')
 
         return losses / len(data_loader), correct / (correct + miss)
 
     def test(self, test_loader, visualize=False):
         activation = {}
 
-        def classifier_activation_hook(self, input, output):
+        def classifier_activation_hook(module, input, output):
             activation['classifier'] = output.cpu().detach().numpy()
 
-        def auto_encoder_activation_hook(self, input, output):
+        def auto_encoder_activation_hook(module, input, output):
             activation['auto_encoder'] = output.cpu().detach().numpy()
 
         def visualize_img(i):
@@ -201,7 +200,7 @@ class CNNTrainer(BaseTrainer):
             pred = torch.argmax(output, 1)
             correct += pred.eq(target).sum().item()
             miss += target.shape[0] - pred.eq(target).sum().item()
-            loss = self.criterion(output, target)
+            loss = self.CE_loss(output, target)
             losses += loss.item()
             # plotting
             if visualize:

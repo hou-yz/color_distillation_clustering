@@ -6,6 +6,7 @@ import sys
 import shutil
 from distutils.dir_util import copy_tree
 import datetime
+from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
@@ -22,36 +23,7 @@ from color_distillation.utils.logger import Logger
 from color_distillation.utils.image_utils import img_color_denormalize
 
 
-def main():
-    # settings
-    parser = argparse.ArgumentParser(description='ColorCNN down sample')
-    parser.add_argument('--num_colors', type=int, default=None)
-    parser.add_argument('--alpha', type=float, default=1, help='multiplier of regularization terms')
-    parser.add_argument('--beta', type=float, default=0, help='multiplier of regularization terms')
-    parser.add_argument('--gamma', type=float, default=0, help='multiplier of reconstruction loss')
-    parser.add_argument('--color_jitter', type=float, default=1)
-    parser.add_argument('--color_norm', type=float, default=4, help='normalizer for color palette')
-    parser.add_argument('--label_smooth', type=float, default=0.0)
-    parser.add_argument('--soften', type=float, default=1, help='soften coefficient for softmax')
-    parser.add_argument('-d', '--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
-    parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
-    parser.add_argument('-j', '--num_workers', type=int, default=4)
-    parser.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
-                        help='input batch size for training (default: 128)')
-    parser.add_argument('--epochs', type=int, default=60, metavar='N', help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=1e-2, metavar='LR', help='learning rate (default: 0.1)')
-    parser.add_argument('--weight_decay', type=float, default=5e-4)
-    parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')
-    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
-                        help='how many batches to wait before logging training status')
-    parser.add_argument('--backbone', type=str, default='unet', choices=['unet', 'dncnn'])
-    parser.add_argument('--resume', type=str, default=None)
-    parser.add_argument('--train_classifier', action='store_true')
-    parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
-    args = parser.parse_args()
-
+def main(args):
     # seed
     if args.seed is not None:
         np.random.seed(args.seed)
@@ -137,9 +109,9 @@ def main():
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size, shuffle=False,
                                               num_workers=args.num_workers, pin_memory=True)
 
-    logdir = 'logs/colorcnn/{}/{}/{}colors/{}'.format(args.dataset, args.arch,
-                                                      'full_' if args.num_colors is None else args.num_colors,
-                                                      datetime.datetime.today().strftime('%Y-%m-%d_%H-%M-%S'))
+    logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/' \
+             f'temp{args.soften}_colormax{args.color_appear_ratio}_conf{args.confidence_ratio}_' + \
+             datetime.datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
     if args.resume is None:
         os.makedirs(logdir, exist_ok=True)
         copy_tree('./color_distillation', logdir + '/scripts/color_distillation')
@@ -181,14 +153,23 @@ def main():
     og_test_loss_s = []
     og_test_prec_s = []
 
-    trainer = CNNTrainer(model, criterion, args.num_colors, classifier, denormalizer, args.alpha, args.beta, args.gamma)
+    # first test the pre-trained classifier
+    print('test the pre-trained classifier...')
+    trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), args.num_colors,
+                         denormalizer=denormalizer, sample_method='og_img')
+    trainer.test(test_loader, args.visualize)
+
+    # then train ColorCNN
+    print('train ColorCNN...')
+    trainer = CNNTrainer(model, criterion, args.num_colors, classifier, denormalizer,
+                         args.color_appear_ratio, args.confidence_ratio, args.gamma)
 
     # learn
     if args.resume is None:
         # print('Testing...')
         # trainer.test(test_loader)
 
-        for epoch in range(1, args.epochs + 1):
+        for epoch in tqdm(range(1, args.epochs + 1)):
             print('Training...')
             train_loss, train_prec = trainer.train(epoch, train_loader, optimizer, args.log_interval, scheduler)
             print('Testing...')
@@ -214,4 +195,35 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # settings
+    parser = argparse.ArgumentParser(description='ColorCNN down sample')
+    parser.add_argument('--num_colors', type=int, default=None)
+    parser.add_argument('--color_appear_ratio', type=float, default=1, help='multiplier of regularization terms')
+    parser.add_argument('--confidence_ratio', type=float, default=0, help='multiplier of regularization terms')
+    parser.add_argument('--gamma', type=float, default=0, help='multiplier of reconstruction loss')
+    parser.add_argument('--color_jitter', type=float, default=1)
+    parser.add_argument('--color_norm', type=float, default=4, help='normalizer for color palette')
+    parser.add_argument('--label_smooth', type=float, default=0.0)
+    parser.add_argument('--soften', type=float, default=1, help='soften coefficient for softmax')
+    parser.add_argument('-d', '--dataset', type=str, default='cifar10',
+                        choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
+    parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
+    parser.add_argument('-j', '--num_workers', type=int, default=4)
+    parser.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
+                        help='input batch size for training (default: 128)')
+    parser.add_argument('--epochs', type=int, default=60, metavar='N', help='number of epochs to train (default: 10)')
+    parser.add_argument('--lr', type=float, default=1e-2, metavar='LR', help='learning rate (default: 0.1)')
+    parser.add_argument('--weight_decay', type=float, default=5e-4)
+    parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')
+    parser.add_argument('--log_interval', type=int, default=1000, metavar='N',
+                        help='how many batches to wait before logging training status')
+    parser.add_argument('--backbone', type=str, default='unet', choices=['unet', 'dncnn', 'cyclegan'])
+    parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--train_classifier', action='store_true')
+    parser.add_argument('--visualize', action='store_true')
+    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
+    args = parser.parse_args()
+
+    assert args.num_colors > 0, 'ColorCNN only support integer as num_colors'
+
+    main(args)
