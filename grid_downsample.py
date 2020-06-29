@@ -20,7 +20,6 @@ from color_distillation.utils.image_utils import img_color_denormalize
 
 
 def main(args):
-
     # seed
     if args.seed is not None:
         np.random.seed(args.seed)
@@ -166,7 +165,7 @@ def main(args):
     masked_test_loss_s = []
     masked_test_prec_s = []
 
-    trainer = CNNTrainer(model, nn.CrossEntropyLoss(), args.num_colors,
+    trainer = CNNTrainer(model, nn.CrossEntropyLoss(),
                          denormalizer=denormalizer, sample_method=args.sample_type)
 
     # learn
