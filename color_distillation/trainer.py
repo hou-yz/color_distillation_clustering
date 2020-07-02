@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
 from io import BytesIO
-from color_distillation.loss.entropy_loss import HLoss
 
 
 class BaseTrainer(object):
@@ -17,16 +16,15 @@ class BaseTrainer(object):
 
 class CNNTrainer(BaseTrainer):
     def __init__(self, model, criterion, classifier=None, denormalizer=None,
-                 color_appear_ratio=None, confidence_ratio=None, gamma=None, sample_method=None):
+                 color_appear_ratio=None, confidence_ratio=None, information_ratio=None, sample_method=None):
         super(BaseTrainer, self).__init__()
         self.model = model
         self.CE_loss = criterion
-        self.IE_loss = HLoss()
         self.classifier = classifier
         self.denormalizer = denormalizer
         self.color_appear_ratio = color_appear_ratio
         self.confidence_ratio = confidence_ratio
-        self.gamma = gamma
+        self.information_ratio = information_ratio
         self.reconsturction_loss = nn.MSELoss()
         self.sample_method = sample_method
         if classifier is not None:
@@ -47,12 +45,8 @@ class CNNTrainer(BaseTrainer):
             if self.color_cnn:
                 # negative #color refers to multiple setting one model, thus needs random setting during training
                 if num_colors < 0:
-                    num_colors = 2 ** np.random.randint(1, int(np.log2(-num_colors)))
+                    num_colors = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
                 transformed_img, prob, color_palette = self.model(data, num_colors)
-                # regularization
-                B, _, H, W = data.shape
-                prob_max, _ = torch.max(prob.view([B, num_colors, -1]), dim=2)
-                avg_max = torch.mean(prob_max)
                 output = self.classifier(transformed_img)
             else:
                 output = self.model(data)
@@ -61,10 +55,15 @@ class CNNTrainer(BaseTrainer):
             miss += target.shape[0] - pred.eq(target).sum().item()
             loss = self.CE_loss(output, target)
             if self.color_cnn:
-                color_appear_loss = np.log2(num_colors) * (1 - avg_max)
-                confidence_loss = self.IE_loss(prob)
+                # regularization
+                B, _, H, W = data.shape
+                color_appear_loss = np.log2(num_colors) * (1 - prob.view([B, num_colors, -1]).max(dim=2)[0].mean())
+                # per-pixel, higher confidence, reduce entropy of per-pixel color distribution
+                confidence_loss = (-prob * torch.log(prob + 1e-16)).mean()
+                # entire-image, even distribution among all colors, increase entropy of entire-image color distribution
+                information_loss = (-prob.mean(dim=[2, 3]) * torch.log(prob.mean(dim=[2, 3]) + 1e-16)).mean()
                 loss += self.color_appear_ratio * color_appear_loss + \
-                        self.confidence_ratio * confidence_loss
+                        self.confidence_ratio * confidence_loss - self.information_ratio * information_loss
 
             loss.backward()
             optimizer.step()
@@ -86,7 +85,8 @@ class CNNTrainer(BaseTrainer):
         print('Train Epoch: {}, Batch:{}, \tLoss: {:.6f}, Prec: {:.1f}%, Time: {:.3f}'.format(
             epoch, len(data_loader), losses / len(data_loader), 100. * correct / (correct + miss), t_epoch))
         if self.color_cnn:
-            print(f'color_appear_loss: {color_appear_loss.item():.3f}, confidence_loss: {confidence_loss.item():.3f}')
+            print(f'color_appear_loss: {color_appear_loss.item():.3f}, confidence_loss: {confidence_loss.item():.3f}, '
+                  f'info_loss: {information_loss.item():.3f}')
 
         return losses / len(data_loader), correct / (correct + miss)
 

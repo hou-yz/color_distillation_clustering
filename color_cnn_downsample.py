@@ -109,8 +109,8 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size, shuffle=False,
                                               num_workers=args.num_workers, pin_memory=True)
 
-    logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/' \
-             f'temp{args.soften}_colormax{args.color_appear_ratio}_conf{args.confidence_ratio}_' + \
+    logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/temp{args.temperature}_' \
+             f'colormax{args.color_appear_ratio}_conf{args.confidence_ratio}_info{args.information_ratio}_' + \
              datetime.datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
     if args.resume is None:
         os.makedirs(logdir, exist_ok=True)
@@ -133,7 +133,7 @@ def main(args):
         for param in classifier.parameters():
             param.requires_grad = False
 
-    model = ColorCNN(args.backbone, args.soften, args.color_norm, args.color_jitter).cuda()
+    model = ColorCNN(args.backbone, args.temperature, args.color_norm, args.color_jitter).cuda()
     optimizer = optim.SGD(list(model.parameters()) + list(classifier.parameters()),
                           lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 20, 1)
@@ -161,13 +161,10 @@ def main(args):
     # then train ColorCNN
     print('train ColorCNN...')
     trainer = CNNTrainer(model, criterion, classifier, denormalizer,
-                         args.color_appear_ratio, args.confidence_ratio, args.gamma)
+                         args.color_appear_ratio, args.confidence_ratio, args.information_ratio)
 
     # learn
     if args.resume is None:
-        # print('Testing...')
-        # trainer.test(test_loader)
-
         for epoch in tqdm(range(1, args.epochs + 1)):
             print('Training...')
             train_loss, train_prec = trainer.train(epoch, train_loader, optimizer, args.num_colors,
@@ -176,10 +173,11 @@ def main(args):
                 print(f'Testing {args.num_colors} colors...')
                 og_test_loss, og_test_prec = trainer.test(test_loader, args.num_colors)
             else:
-                for i in range(1, int(np.log2(-args.num_colors))):
-                    n_colors = 2 ** i
-                    print(f'Testing {n_colors} colors...')
-                    trainer.test(test_loader, n_colors)
+                if epoch % 5 == 0:
+                    for i in range(1, int(np.log2(-args.num_colors)) + 1):
+                        n_colors = 2 ** i
+                        print(f'Testing {n_colors} colors...')
+                        trainer.test(test_loader, n_colors)
 
             if args.num_colors > 0:
                 x_epoch.append(epoch)
@@ -202,7 +200,7 @@ def main(args):
             print(f'Testing {args.num_colors} colors...')
             trainer.test(test_loader, args.num_colors, args.visualize)
         else:
-            for i in range(1, int(np.log2(-args.num_colors))):
+            for i in range(1, int(np.log2(-args.num_colors)) + 1):
                 n_colors = 2 ** i
                 print(f'Testing {n_colors} colors...')
                 trainer.test(test_loader, n_colors, args.visualize)
@@ -212,13 +210,15 @@ if __name__ == '__main__':
     # settings
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
-    parser.add_argument('--color_appear_ratio', type=float, default=1, help='multiplier of regularization terms')
-    parser.add_argument('--confidence_ratio', type=float, default=0, help='multiplier of regularization terms')
-    parser.add_argument('--gamma', type=float, default=0, help='multiplier of reconstruction loss')
+    parser.add_argument('--color_appear_ratio', type=float, default=1, help='ensure all colors present')
+    parser.add_argument('--confidence_ratio', type=float, default=0,
+                        help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
+    parser.add_argument('--information_ratio', type=float, default=0,
+                        help='even distribution among all colors, increase entropy of entire-image color distribution')
     parser.add_argument('--color_jitter', type=float, default=1)
     parser.add_argument('--color_norm', type=float, default=4, help='normalizer for color palette')
     parser.add_argument('--label_smooth', type=float, default=0.0)
-    parser.add_argument('--soften', type=float, default=1, help='soften coefficient for softmax')
+    parser.add_argument('--temperature', type=float, default=1, help='temperature for softmax')
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
@@ -227,7 +227,7 @@ if __name__ == '__main__':
                         help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=120, metavar='N', help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=1e-2, metavar='LR', help='learning rate (default: 0.1)')
-    parser.add_argument('--weight_decay', type=float, default=5e-4)
+    parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')
     parser.add_argument('--log_interval', type=int, default=1000, metavar='N',
                         help='how many batches to wait before logging training status')

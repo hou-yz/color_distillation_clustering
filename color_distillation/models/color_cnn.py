@@ -7,9 +7,9 @@ from color_distillation.models.unet import UNet
 
 
 class ColorCNN(nn.Module):
-    def __init__(self, arch, soften=1, color_norm=1, color_jitter=0):
+    def __init__(self, arch, temperature=1, color_norm=1, color_jitter=0):
         super().__init__()
-        self.soften = soften
+        self.temperature = temperature
         self.color_norm = color_norm
         self.color_jitter = color_jitter
         if arch == 'unet':
@@ -28,7 +28,7 @@ class ColorCNN(nn.Module):
         feat = self.base(img)
         m = self.color_mask(feat)
         m = m[:, :num_colors]
-        m = self.mask_softmax(self.soften * m)  # softmax output
+        m = self.mask_softmax(self.temperature * m)  # softmax output
         M = torch.argmax(m, dim=1, keepdim=True)  # argmax color index map
         if training:
             color_palette = (img.unsqueeze(2) * m.unsqueeze(1)).sum(dim=[3, 4], keepdim=True) / (
