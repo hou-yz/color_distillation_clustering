@@ -16,15 +16,15 @@ class BaseTrainer(object):
 
 class CNNTrainer(BaseTrainer):
     def __init__(self, model, criterion, classifier=None, denormalizer=None,
-                 color_appear_ratio=None, confidence_ratio=None, information_ratio=None, sample_method=None):
+                 colormax_ratio=None, conf_ratio=None, info_ratio=None, sample_method=None):
         super(BaseTrainer, self).__init__()
         self.model = model
         self.CE_loss = criterion
         self.classifier = classifier
         self.denormalizer = denormalizer
-        self.color_appear_ratio = color_appear_ratio
-        self.confidence_ratio = confidence_ratio
-        self.information_ratio = information_ratio
+        self.colormax_ratio = colormax_ratio
+        self.conf_ratio = conf_ratio
+        self.info_ratio = info_ratio
         self.reconsturction_loss = nn.MSELoss()
         self.sample_method = sample_method
         if classifier is not None:
@@ -38,15 +38,16 @@ class CNNTrainer(BaseTrainer):
         losses = 0
         correct = 0
         miss = 0
+        num_colors_batch = num_colors
         t0 = time.time()
         for batch_idx, (data, target) in enumerate(data_loader):
             data, target = data.cuda(), target.cuda()
             optimizer.zero_grad()
             if self.color_cnn:
                 # negative #color refers to multiple setting one model, thus needs random setting during training
-                if num_colors < 0:
-                    num_colors = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
-                transformed_img, prob, color_palette = self.model(data, num_colors)
+                if num_colors_batch < 0:
+                    num_colors_batch = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
+                transformed_img, prob, color_palette = self.model(data, num_colors_batch)
                 output = self.classifier(transformed_img)
             else:
                 output = self.model(data)
@@ -57,13 +58,14 @@ class CNNTrainer(BaseTrainer):
             if self.color_cnn:
                 # regularization
                 B, _, H, W = data.shape
-                color_appear_loss = np.log2(num_colors) * (1 - prob.view([B, num_colors, -1]).max(dim=2)[0].mean())
+                color_appear_loss = prob.view([B, -1, H * W]).max(dim=2)[0].mean()
                 # per-pixel, higher confidence, reduce entropy of per-pixel color distribution
                 confidence_loss = (-prob * torch.log(prob + 1e-16)).mean()
                 # entire-image, even distribution among all colors, increase entropy of entire-image color distribution
                 information_loss = (-prob.mean(dim=[2, 3]) * torch.log(prob.mean(dim=[2, 3]) + 1e-16)).mean()
-                loss += self.color_appear_ratio * color_appear_loss + \
-                        self.confidence_ratio * confidence_loss - self.information_ratio * information_loss
+                loss += self.colormax_ratio * -color_appear_loss + \
+                        self.conf_ratio * confidence_loss + \
+                        self.info_ratio * -information_loss
 
             loss.backward()
             optimizer.step()
@@ -90,7 +92,7 @@ class CNNTrainer(BaseTrainer):
 
         return losses / len(data_loader), correct / (correct + miss)
 
-    def test(self, test_loader, num_colors=None, visualize=False):
+    def test(self, test_loader, num_colors=None, visualize=False, test_mode='test'):
         activation = {}
 
         def classifier_activation_hook(module, input, output):
@@ -164,7 +166,7 @@ class CNNTrainer(BaseTrainer):
         if visualize:
             if self.color_cnn:
                 self.classifier.features.register_forward_hook(classifier_activation_hook)
-                self.model.base.register_forward_hook(auto_encoder_activation_hook)
+                self.model.base_global.register_forward_hook(auto_encoder_activation_hook)
 
                 classifier_layer = self.classifier.classifier
                 if isinstance(classifier_layer, nn.Sequential):
@@ -183,7 +185,7 @@ class CNNTrainer(BaseTrainer):
             with torch.no_grad():
                 if self.color_cnn:
                     B, C, H, W = data.shape
-                    transformed_img, prob, _ = self.model(data, num_colors, training=False)
+                    transformed_img, prob, _ = self.model(data, num_colors, mode=test_mode)
                     output = self.classifier(transformed_img)
                     # image file size
                     M = torch.argmax(prob, dim=1, keepdim=True)  # argmax color index map

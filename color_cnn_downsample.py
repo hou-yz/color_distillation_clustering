@@ -110,7 +110,8 @@ def main(args):
                                               num_workers=args.num_workers, pin_memory=True)
 
     logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/temp{args.temperature}_' \
-             f'colormax{args.color_appear_ratio}_conf{args.confidence_ratio}_info{args.information_ratio}_' + \
+             f'colormax{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' + \
+             f'jitter{args.color_jitter}_colornorm{args.color_norm}_' + \
              datetime.datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
     if args.resume is None:
         os.makedirs(logdir, exist_ok=True)
@@ -134,8 +135,7 @@ def main(args):
             param.requires_grad = False
 
     model = ColorCNN(args.backbone, args.temperature, args.color_norm, args.color_jitter).cuda()
-    optimizer = optim.SGD(list(model.parameters()) + list(classifier.parameters()),
-                          lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 20, 1)
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
     #                                                 steps_per_epoch=len(train_loader), epochs=args.epochs)
@@ -161,7 +161,7 @@ def main(args):
     # then train ColorCNN
     print('train ColorCNN...')
     trainer = CNNTrainer(model, criterion, classifier, denormalizer,
-                         args.color_appear_ratio, args.confidence_ratio, args.information_ratio)
+                         args.colormax_ratio, args.conf_ratio, args.info_ratio)
 
     # learn
     if args.resume is None:
@@ -173,11 +173,12 @@ def main(args):
                 print(f'Testing {args.num_colors} colors...')
                 og_test_loss, og_test_prec = trainer.test(test_loader, args.num_colors)
             else:
-                if epoch % 5 == 0:
+                if epoch % 20 == 0:
                     for i in range(1, int(np.log2(-args.num_colors)) + 1):
                         n_colors = 2 ** i
                         print(f'Testing {n_colors} colors...')
                         trainer.test(test_loader, n_colors)
+                torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
 
             if args.num_colors > 0:
                 x_epoch.append(epoch)
@@ -187,6 +188,16 @@ def main(args):
                 og_test_prec_s.append(og_test_prec)
                 draw_curve(os.path.join(logdir, 'learning_curve.jpg'), x_epoch, train_loss_s, train_prec_s,
                            og_test_loss_s, og_test_prec_s)
+
+        if args.num_colors > 0:
+            print(f'Testing {args.num_colors} colors...')
+            trainer.test(test_loader, args.num_colors, test_mode='test_cluster')
+        else:
+            for i in range(1, int(np.log2(-args.num_colors)) + 1):
+                n_colors = 2 ** i
+                print(f'Testing {n_colors} colors...')
+                trainer.test(test_loader, n_colors, test_mode='test_cluster')
+            torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
         # save
         torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
     else:
@@ -198,25 +209,30 @@ def main(args):
         print('Test loaded model...')
         if args.num_colors > 0:
             print(f'Testing {args.num_colors} colors...')
-            trainer.test(test_loader, args.num_colors, args.visualize)
+            trainer.test(test_loader, args.num_colors, visualize=args.visualize, test_mode='test_cluster')
         else:
             for i in range(1, int(np.log2(-args.num_colors)) + 1):
                 n_colors = 2 ** i
                 print(f'Testing {n_colors} colors...')
-                trainer.test(test_loader, n_colors, args.visualize)
+                trainer.test(test_loader, n_colors, visualize=args.visualize, test_mode='test_cluster')
+
+    # at last test the pre-trained classifier again
+    print('test the pre-trained classifier...')
+    trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), denormalizer=denormalizer, sample_method='og_img')
+    trainer.test(test_loader, args.visualize)
 
 
 if __name__ == '__main__':
     # settings
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
-    parser.add_argument('--color_appear_ratio', type=float, default=1, help='ensure all colors present')
-    parser.add_argument('--confidence_ratio', type=float, default=0,
+    parser.add_argument('--colormax_ratio', type=float, default=1, help='ensure all colors present')
+    parser.add_argument('--conf_ratio', type=float, default=0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
-    parser.add_argument('--information_ratio', type=float, default=0,
+    parser.add_argument('--info_ratio', type=float, default=0,
                         help='even distribution among all colors, increase entropy of entire-image color distribution')
-    parser.add_argument('--color_jitter', type=float, default=1)
-    parser.add_argument('--color_norm', type=float, default=4, help='normalizer for color palette')
+    parser.add_argument('--color_jitter', type=float, default=2.0)
+    parser.add_argument('--color_norm', type=float, default=1.0, help='normalizer for color palette')
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--temperature', type=float, default=1, help='temperature for softmax')
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',

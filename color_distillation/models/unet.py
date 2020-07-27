@@ -88,18 +88,18 @@ class outconv(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self):
+    def __init__(self, feature_dim=64):
         super(UNet, self).__init__()
-        self.inc = inconv(3, 64)
-        self.down1 = down(64, 128)
-        self.down2 = down(128, 256)
-        self.down3 = down(256, 512)
-        self.down4 = down(512, 512)
-        self.up1 = up(1024, 256)
-        self.up2 = up(512, 128)
-        self.up3 = up(256, 64)
-        self.up4 = up(128, 64)
-        self.out_channel = 64
+        self.inc = inconv(3, feature_dim)
+        self.down1 = down(feature_dim, feature_dim * 2)
+        self.down2 = down(feature_dim * 2, feature_dim * 4)
+        self.down3 = down(feature_dim * 4, feature_dim * 8)
+        self.down4 = down(feature_dim * 8, feature_dim * 8)
+        self.up1 = up(feature_dim * 16, feature_dim * 4)
+        self.up2 = up(feature_dim * 8, feature_dim * 2)
+        self.up3 = up(feature_dim * 4, feature_dim)
+        self.up4 = up(feature_dim * 2, feature_dim)
+        self.out_channel = feature_dim
 
     def forward(self, x):
         x1 = self.inc(x)

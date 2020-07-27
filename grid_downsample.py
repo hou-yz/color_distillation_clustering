@@ -196,13 +196,13 @@ def main(args):
             # model = checkpoint_loader(model,resume_fname)
             model.load_state_dict(torch.load(resume_fname))
         model.eval()
-        # print('Test on original dateset...')
-        # trainer.test(og_test_loader)
-        # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
-        #       f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+        print('Test on original dateset...')
+        trainer.test(og_test_loader)
+        print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
+              f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
         buffer_size_counter.reset()
         print('Test on sampled dateset...')
-        trainer.test(sampled_test_loader, args.visualize)
+        trainer.test(sampled_test_loader, visualize=args.visualize)
         print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
               f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
 
