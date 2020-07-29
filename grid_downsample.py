@@ -165,14 +165,14 @@ def main(args):
     masked_test_loss_s = []
     masked_test_prec_s = []
 
-    trainer = CNNTrainer(model, nn.CrossEntropyLoss(),
-                         denormalizer=denormalizer, sample_method=args.sample_type)
+    trainer = CNNTrainer(model, nn.CrossEntropyLoss(), denormalizer=denormalizer, sample_method=args.sample_type)
 
     # learn
     if args.train:
         for epoch in tqdm(range(1, args.epochs + 1)):
             print('Train on sampled dateset...')
-            train_loss, train_prec = trainer.train(epoch, sampled_train_loader, optimizer, args.log_interval, scheduler)
+            train_loss, train_prec = trainer.train(epoch, sampled_train_loader, optimizer,
+                                                   log_interval=args.log_interval, cyclic_scheduler=scheduler)
             print('Test on original dateset...')
             og_test_loss, og_test_prec = trainer.test(og_test_loader)
             print('Test on sampled dateset...')
@@ -193,18 +193,35 @@ def main(args):
         if args.dataset != 'imagenet':
             resume_dir = 'logs/grid/{}/{}/full_colors'.format(args.dataset, args.arch)
             resume_fname = resume_dir + '/model.pth'
-            # model = checkpoint_loader(model,resume_fname)
             model.load_state_dict(torch.load(resume_fname))
-        model.eval()
-        print('Test on original dateset...')
-        trainer.test(og_test_loader)
-        print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
-              f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
-        buffer_size_counter.reset()
-        print('Test on sampled dateset...')
+    pass
+    # test
+    model.eval()
+    # without adversarial
+    # print('Test on original dateset...')
+    # trainer.test(og_test_loader)
+    # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
+    #       f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+    # buffer_size_counter.reset()
+    print('Test on sampled dateset...')
+    trainer.test(sampled_test_loader, visualize=args.visualize)
+    print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
+          f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+    buffer_size_counter.reset()
+    # with adversarial
+    if args.adversarial:
+        trainer = CNNTrainer(model, nn.CrossEntropyLoss(), adversarial=args.adversarial,
+                             denormalizer=denormalizer, sample_method=args.sample_type)
+        # print(f'Test on original dateset [adversarial: {args.adversarial}]...')
+        # trainer.test(og_test_loader)
+        # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
+        #       f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+        # buffer_size_counter.reset()
+        print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
         trainer.test(sampled_test_loader, visualize=args.visualize)
         print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
               f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+    pass
 
 
 if __name__ == '__main__':
@@ -216,6 +233,7 @@ if __name__ == '__main__':
     parser.add_argument('--dither', action='store_true', default=False)
     parser.add_argument('--jpeg_ratio', type=int, default=None)
     parser.add_argument('--train', action='store_true', default=False)
+    parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())

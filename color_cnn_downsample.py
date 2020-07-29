@@ -134,9 +134,10 @@ def main(args):
         for param in classifier.parameters():
             param.requires_grad = False
 
-    model = ColorCNN(args.backbone, args.temperature, args.color_norm, args.color_jitter).cuda()
+    model = ColorCNN(args.backbone, args.temperature, args.color_norm, args.color_jitter, args.gaussian_noise,
+                     args.color_dropout, args.bottleneck_channel).cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 20, 1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.steps, 1)
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
     #                                                 steps_per_epoch=len(train_loader), epochs=args.epochs)
 
@@ -146,86 +147,73 @@ def main(args):
     else:
         criterion = nn.CrossEntropyLoss()
 
-    # draw curve
-    x_epoch = []
-    train_loss_s = []
-    train_prec_s = []
-    og_test_loss_s = []
-    og_test_prec_s = []
-
     # first test the pre-trained classifier
-    print('test the pre-trained classifier...')
+    print('Test the pre-trained classifier...')
     trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), denormalizer=denormalizer, sample_method='og_img')
-    trainer.test(test_loader, args.visualize)
+    trainer.test(test_loader, visualize=args.visualize)
 
     # then train ColorCNN
-    print('train ColorCNN...')
-    trainer = CNNTrainer(model, criterion, classifier, denormalizer,
-                         args.colormax_ratio, args.conf_ratio, args.info_ratio)
+    trainer = CNNTrainer(classifier, criterion, model, denormalizer=denormalizer,
+                         colormax_ratio=args.colormax_ratio, conf_ratio=args.conf_ratio, info_ratio=args.info_ratio)
+
+    def test(test_mode='test_cluster'):
+        if args.num_colors > 0:
+            print(f'Testing {args.num_colors} colors...')
+            trainer.test(test_loader, args.num_colors, visualize=args.visualize, test_mode=test_mode)
+        else:
+            for i in range(1, int(np.log2(-args.num_colors)) + 1):
+                n_colors = 2 ** i
+                print(f'Testing {n_colors} colors...')
+                trainer.test(test_loader, n_colors, visualize=args.visualize, test_mode=test_mode)
 
     # learn
     if args.resume is None:
+        print('Train ColorCNN...')
         for epoch in tqdm(range(1, args.epochs + 1)):
             print('Training...')
-            train_loss, train_prec = trainer.train(epoch, train_loader, optimizer, args.num_colors,
-                                                   args.log_interval, scheduler)
-            if args.num_colors > 0:
-                print(f'Testing {args.num_colors} colors...')
-                og_test_loss, og_test_prec = trainer.test(test_loader, args.num_colors)
-            else:
-                if epoch % 20 == 0:
-                    for i in range(1, int(np.log2(-args.num_colors)) + 1):
-                        n_colors = 2 ** i
-                        print(f'Testing {n_colors} colors...')
-                        trainer.test(test_loader, n_colors)
-                torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
-
-            if args.num_colors > 0:
-                x_epoch.append(epoch)
-                train_loss_s.append(train_loss)
-                train_prec_s.append(train_prec)
-                og_test_loss_s.append(og_test_loss)
-                og_test_prec_s.append(og_test_prec)
-                draw_curve(os.path.join(logdir, 'learning_curve.jpg'), x_epoch, train_loss_s, train_prec_s,
-                           og_test_loss_s, og_test_prec_s)
-
-        if args.num_colors > 0:
-            print(f'Testing {args.num_colors} colors...')
-            trainer.test(test_loader, args.num_colors, test_mode='test_cluster')
-        else:
-            for i in range(1, int(np.log2(-args.num_colors)) + 1):
-                n_colors = 2 ** i
-                print(f'Testing {n_colors} colors...')
-                trainer.test(test_loader, n_colors, test_mode='test_cluster')
-            torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
+            trainer.train(epoch, train_loader, optimizer, args.num_colors,
+                          args.log_interval, scheduler)
+            if epoch % args.steps == 0:
+                test(test_mode='test')
         # save
         torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
     else:
-        resume_dir = 'logs/colorcnn/{}/{}/{}colors/'.format(
-            args.dataset, args.arch, 'full_' if args.num_colors is None else args.num_colors) + args.resume
+        resume_dir = 'logs/colorcnn/{}/{}/{}colors/'.format(args.dataset, args.arch, args.num_colors) + args.resume
         resume_fname = resume_dir + '/ColorCNN.pth'
         model.load_state_dict(torch.load(resume_fname))
-        model.eval()
-        print('Test loaded model...')
-        if args.num_colors > 0:
-            print(f'Testing {args.num_colors} colors...')
-            trainer.test(test_loader, args.num_colors, visualize=args.visualize, test_mode='test_cluster')
-        else:
-            for i in range(1, int(np.log2(-args.num_colors)) + 1):
-                n_colors = 2 ** i
-                print(f'Testing {n_colors} colors...')
-                trainer.test(test_loader, n_colors, visualize=args.visualize, test_mode='test_cluster')
+    # test
+    model.eval()
+    print('Test using per-pixel classification...')
+    test(test_mode='test')
+    # print('Test using clustering...')
+    # test(test_mode='test_cluster')
+    # with adversarial
+    if args.adversarial:
+        trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), model, adversarial=args.adversarial,
+                             denormalizer=denormalizer)
+        print(f'Test using per-pixel classification [adversarial: {args.adversarial}]...')
+        test(test_mode='test')
+        # print(f'Test using clustering [adversarial: {args.adversarial}]...')
+        # test(test_mode='test_cluster')
 
     # at last test the pre-trained classifier again
-    print('test the pre-trained classifier...')
+    print('Test the pre-trained classifier...')
     trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), denormalizer=denormalizer, sample_method='og_img')
-    trainer.test(test_loader, args.visualize)
+    trainer.test(test_loader, visualize=args.visualize)
+
+    # with adversarial
+    if args.adversarial:
+        trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), adversarial=args.adversarial,
+                             denormalizer=denormalizer, sample_method='og_img')
+        print(f'Test the pre-trained classifier [adversarial: {args.adversarial}]...')
+        trainer.test(test_loader, visualize=args.visualize)
 
 
 if __name__ == '__main__':
     # settings
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
+    parser.add_argument('--bottleneck_channel', type=int, default=3)
     parser.add_argument('--colormax_ratio', type=float, default=1, help='ensure all colors present')
     parser.add_argument('--conf_ratio', type=float, default=0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
@@ -233,8 +221,11 @@ if __name__ == '__main__':
                         help='even distribution among all colors, increase entropy of entire-image color distribution')
     parser.add_argument('--color_jitter', type=float, default=2.0)
     parser.add_argument('--color_norm', type=float, default=1.0, help='normalizer for color palette')
+    parser.add_argument('--color_dropout', type=float, default=0.0, help='dropout for color palette')
+    parser.add_argument('--gaussian_noise', type=float, default=0.0, help='gaussian noise on quantized image')
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--temperature', type=float, default=1, help='temperature for softmax')
+    parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
@@ -242,8 +233,9 @@ if __name__ == '__main__':
     parser.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=120, metavar='N', help='number of epochs to train (default: 10)')
+    parser.add_argument('--steps', type=int, default=20, metavar='N', help='number of steps to train (default: 10)')
     parser.add_argument('--lr', type=float, default=1e-2, metavar='LR', help='learning rate (default: 0.1)')
-    parser.add_argument('--weight_decay', type=float, default=0)
+    parser.add_argument('--weight_decay', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')
     parser.add_argument('--log_interval', type=int, default=1000, metavar='N',
                         help='how many batches to wait before logging training status')

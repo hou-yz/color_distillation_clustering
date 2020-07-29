@@ -9,11 +9,13 @@ from color_distillation.models.unet import UNet
 
 
 class ColorCNN(nn.Module):
-    def __init__(self, arch, temperature=1, color_norm=1, color_jitter=0):
+    def __init__(self, arch, temperature=1.0, color_norm=1.0, color_jitter=0.0, gaussian_noise=0.0, dropout=0.0,
+                 bottleneck_channel=3):
         super().__init__()
         self.temperature = temperature
         self.color_norm = color_norm
         self.color_jitter = color_jitter
+        self.gaussian_noise = gaussian_noise
         if arch == 'unet':
             self.base_global = UNet(feature_dim=64)
         elif arch == 'dncnn':
@@ -22,7 +24,6 @@ class ColorCNN(nn.Module):
             self.base_global = GeneratorResNet()
         else:
             raise Exception
-        bottleneck_channel = 3
         self.base_head = nn.Sequential(nn.Conv2d(self.base_global.out_channel, bottleneck_channel, 1),
                                        nn.BatchNorm2d(bottleneck_channel), nn.ReLU(), )
         self.base_attention = nn.Sequential(nn.Linear(1, 64), nn.ReLU(),
@@ -30,7 +31,7 @@ class ColorCNN(nn.Module):
                                             nn.Linear(64, 2), nn.Softmax(dim=1))
         # support color quantization into 256 colors at most
         self.color_mask = nn.Sequential(nn.Conv2d(bottleneck_channel, 256, 1, bias=False))
-        # self.mask_softmax = nn.Softmax2d()
+        self.color_dropout = nn.Dropout3d(p=dropout)
 
     def forward(self, img, num_colors, mode='train'):
         B, _, H, W = img.shape
@@ -41,14 +42,17 @@ class ColorCNN(nn.Module):
         #        img * global_local_weight[:, 1].view([B, 1, 1, 1])
         m = self.color_mask(feat)
         m = m.view([B, -1, num_colors, H, W]).sum(dim=1)
-        m = F.softmax(self.temperature * m, dim=1)  # softmax output
+        # m = m[:, :num_colors]
+        m = F.softmax(m / self.temperature, dim=1)  # softmax output
         M = torch.argmax(m, dim=1, keepdim=True)  # argmax color index map
         if mode == 'train':
             color_palette = (img.unsqueeze(2) * m.unsqueeze(1)).sum(dim=[3, 4], keepdim=True) / (
                     m.unsqueeze(1).sum(dim=[3, 4], keepdim=True) + 1e-8) / self.color_norm
+            color_palette = self.color_dropout(color_palette.transpose(1, 2)).transpose(1, 2)
             jitter_color_palette = color_palette + self.color_jitter * \
                                    torch.randn([B, 3, 1, 1, 1]).to(color_palette.device)
             transformed_img = (m.unsqueeze(1) * jitter_color_palette).sum(dim=2)
+            transformed_img += self.gaussian_noise * torch.randn_like(transformed_img)
         else:
             if 'cluster' in mode:
                 feat_1d = feat.permute([0, 2, 3, 1]).view([B, H * W, -1]).detach()
@@ -68,8 +72,8 @@ class ColorCNN(nn.Module):
 
 
 if __name__ == '__main__':
-    img = torch.randn([10, 3, 32, 32])
-    model = ColorCNN('cyclegan', 128)
+    img = torch.randn([10, 3, 32, 32]).cuda()
+    model = ColorCNN('cyclegan', dropout=0.5).cuda()
     train_img = model(img, 8)
     test_img = model(img, 8, mode='test_cluster')
     pass
