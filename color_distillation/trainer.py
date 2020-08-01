@@ -17,7 +17,7 @@ class BaseTrainer(object):
 
 class CNNTrainer(BaseTrainer):
     def __init__(self, classifier, criterion, colorcnn=None, adversarial=None, denormalizer=None,
-                 colormax_ratio=None, conf_ratio=None, info_ratio=None, sample_method=None):
+                 colormax_ratio=None, conf_ratio=None, info_ratio=None, sample_method=None, sample_trans=None):
         super(BaseTrainer, self).__init__()
         self.classifier = classifier
         self.CE_loss = criterion
@@ -121,8 +121,7 @@ class CNNTrainer(BaseTrainer):
                 og_img = Image.fromarray((og_img * 255).astype('uint8')).resize((512, 512))
                 og_img.save('og_img.png')
 
-                downsampled_img = self.denormalizer(transformed_img[i]).cpu().numpy().squeeze().transpose(
-                    [1, 2, 0])
+                downsampled_img = self.denormalizer(data[i]).cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
                 downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512))

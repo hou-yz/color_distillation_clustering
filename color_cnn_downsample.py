@@ -137,6 +137,7 @@ def main(args):
     model = ColorCNN(args.backbone, args.temperature, args.color_norm, args.color_jitter, args.gaussian_noise,
                      args.color_dropout, args.bottleneck_channel).cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.steps, 1)
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
     #                                                 steps_per_epoch=len(train_loader), epochs=args.epochs)
@@ -173,7 +174,10 @@ def main(args):
             print('Training...')
             trainer.train(epoch, train_loader, optimizer, args.num_colors,
                           args.log_interval, scheduler)
-            if epoch % args.steps == 0:
+            if args.num_colors < 0:
+                if epoch % args.steps == 0:
+                    test(test_mode='test')
+            else:
                 test(test_mode='test')
         # save
         torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
@@ -213,14 +217,14 @@ if __name__ == '__main__':
     # settings
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
-    parser.add_argument('--bottleneck_channel', type=int, default=3)
+    parser.add_argument('--bottleneck_channel', type=int, default=None)
     parser.add_argument('--colormax_ratio', type=float, default=1, help='ensure all colors present')
     parser.add_argument('--conf_ratio', type=float, default=0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
     parser.add_argument('--info_ratio', type=float, default=0,
                         help='even distribution among all colors, increase entropy of entire-image color distribution')
-    parser.add_argument('--color_jitter', type=float, default=2.0)
-    parser.add_argument('--color_norm', type=float, default=1.0, help='normalizer for color palette')
+    parser.add_argument('--color_jitter', type=float, default=1.0)
+    parser.add_argument('--color_norm', type=float, default=4.0, help='normalizer for color palette')
     parser.add_argument('--color_dropout', type=float, default=0.0, help='dropout for color palette')
     parser.add_argument('--gaussian_noise', type=float, default=0.0, help='gaussian noise on quantized image')
     parser.add_argument('--label_smooth', type=float, default=0.0)

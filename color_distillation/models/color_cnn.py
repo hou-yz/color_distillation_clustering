@@ -24,18 +24,19 @@ class ColorCNN(nn.Module):
             self.base_global = GeneratorResNet()
         else:
             raise Exception
-        self.base_head = nn.Sequential(nn.Conv2d(self.base_global.out_channel, bottleneck_channel, 1),
-                                       nn.BatchNorm2d(bottleneck_channel), nn.ReLU(), )
-        self.base_attention = nn.Sequential(nn.Linear(1, 64), nn.ReLU(),
-                                            nn.Linear(64, 64), nn.ReLU(),
-                                            nn.Linear(64, 2), nn.Softmax(dim=1))
+        self.bottleneck = nn.Sequential(nn.Conv2d(self.base_global.out_channel, bottleneck_channel, 1),
+                                        nn.BatchNorm2d(bottleneck_channel),
+                                        nn.ReLU(), ) if bottleneck_channel else nn.Sequential()
+        self.base_local = nn.Sequential(nn.Conv2d(3, 64, 1), nn.BatchNorm2d(64), nn.ReLU(),
+                                        nn.Conv2d(64, 64, 1), nn.BatchNorm2d(64), nn.ReLU(),
+                                        nn.Conv2d(64, 64, 1), nn.BatchNorm2d(64), nn.ReLU(), )
         # support color quantization into 256 colors at most
-        self.color_mask = nn.Sequential(nn.Conv2d(bottleneck_channel, 256, 1, bias=False))
+        self.color_mask = nn.Sequential(nn.Conv2d(bottleneck_channel if bottleneck_channel else 64, 256, 1, bias=False))
         self.color_dropout = nn.Dropout3d(p=dropout)
 
     def forward(self, img, num_colors, mode='train'):
         B, _, H, W = img.shape
-        feat = self.base_head(self.base_global(img))
+        feat = self.bottleneck(self.base_global(img))
         # feat = torch.cat([feat, img], dim=1)
         # global_local_weight = self.base_attention(torch.ones([B, 1]).to(img.device) * num_colors)
         # feat = self.base_head(self.base_global(img)) * global_local_weight[:, 0].view([B, 1, 1, 1]) + \
@@ -49,8 +50,7 @@ class ColorCNN(nn.Module):
             color_palette = (img.unsqueeze(2) * m.unsqueeze(1)).sum(dim=[3, 4], keepdim=True) / (
                     m.unsqueeze(1).sum(dim=[3, 4], keepdim=True) + 1e-8) / self.color_norm
             color_palette = self.color_dropout(color_palette.transpose(1, 2)).transpose(1, 2)
-            jitter_color_palette = color_palette + self.color_jitter * \
-                                   torch.randn([B, 3, 1, 1, 1]).to(color_palette.device)
+            jitter_color_palette = (color_palette + self.color_jitter * torch.randn(1).to(img.device))
             transformed_img = (m.unsqueeze(1) * jitter_color_palette).sum(dim=2)
             transformed_img += self.gaussian_noise * torch.randn_like(transformed_img)
         else:
