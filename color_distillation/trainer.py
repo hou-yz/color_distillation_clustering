@@ -8,6 +8,10 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
 from io import BytesIO
+from color_distillation.loss import LSR_loss, KD_loss
+from color_distillation.models.alexnet import AlexNet
+from color_distillation.models.vgg import VGG
+from color_distillation.models.resnet import ResNet
 
 
 class BaseTrainer(object):
@@ -16,17 +20,21 @@ class BaseTrainer(object):
 
 
 class CNNTrainer(BaseTrainer):
-    def __init__(self, classifier, criterion, colorcnn=None, adversarial=None, denormalizer=None,
-                 colormax_ratio=None, conf_ratio=None, info_ratio=None, sample_method=None, sample_trans=None):
+    def __init__(self, classifier, colorcnn=None, label_smooth=0.0, adversarial=None, denormalizer=None,
+                 kd_ratio=0.0, perceptual_ratio=0.0,
+                 colormax_ratio=0.0, conf_ratio=0.0, info_ratio=0.0, sample_method=None, sample_trans=None):
         super(BaseTrainer, self).__init__()
         self.classifier = classifier
-        self.CE_loss = criterion
+        if label_smooth:
+            self.CE_loss = LSR_loss(label_smooth)
+        else:
+            self.CE_loss = nn.CrossEntropyLoss()
+        self.KD_loss = KD_loss()
+        self.MSE_loss = nn.MSELoss()
         self.colorcnn = colorcnn
         self.denormalizer = denormalizer
-        self.colormax_ratio = colormax_ratio
-        self.conf_ratio = conf_ratio
-        self.info_ratio = info_ratio
-        self.reconsturction_loss = nn.MSELoss()
+        self.kd_ratio, self.perceptual_ratio, self.colormax_ratio, self.conf_ratio, self.info_ratio = \
+            kd_ratio, perceptual_ratio, colormax_ratio, conf_ratio, info_ratio
         self.sample_method = sample_method
         if colorcnn is not None:
             self.sample_method = 'colorcnn'
@@ -40,6 +48,7 @@ class CNNTrainer(BaseTrainer):
             self.adversarial = attacks.CW(self.classifier)
         else:
             self.adversarial = None
+        self.sample_trans = sample_trans
 
     def train(self, epoch, data_loader, optimizer, num_colors=None, log_interval=100, cyclic_scheduler=None, ):
         if self.colorcnn:
@@ -47,12 +56,26 @@ class CNNTrainer(BaseTrainer):
             self.classifier.eval()
         else:
             self.classifier.train()
+        activation = []
+
+        def cnn_activation_hook(module, input, output):
+            activation.append(output)
+
+        if isinstance(self.classifier, AlexNet):
+            handle = self.classifier.features[-2].register_forward_hook(cnn_activation_hook)
+        elif isinstance(self.classifier, VGG):
+            handle = self.classifier.features.register_forward_hook(cnn_activation_hook)
+        elif isinstance(self.classifier, ResNet):
+            handle = self.classifier.layer4.register_forward_hook(cnn_activation_hook)
+        else:
+            raise Exception
         losses = 0
         correct = 0
         miss = 0
         num_colors_batch = num_colors
         t0 = time.time()
         for batch_idx, (data, target) in enumerate(data_loader):
+            activation = []
             data, target = data.cuda(), target.cuda()
             optimizer.zero_grad()
             if self.colorcnn:
@@ -61,6 +84,8 @@ class CNNTrainer(BaseTrainer):
                     num_colors_batch = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
                 transformed_img, prob, color_palette = self.colorcnn(data, num_colors_batch)
                 output = self.classifier(transformed_img)
+                if self.perceptual_ratio or self.kd_ratio:
+                    output_target = self.classifier(data)
             else:
                 output = self.classifier(data)
             pred = torch.argmax(output, 1)
@@ -72,12 +97,16 @@ class CNNTrainer(BaseTrainer):
                 B, _, H, W = data.shape
                 color_appear_loss = prob.view([B, -1, H * W]).max(dim=2)[0].mean()
                 # per-pixel, higher confidence, reduce entropy of per-pixel color distribution
-                confidence_loss = (-prob * torch.log(prob + 1e-16)).mean()
+                conf_loss = (-prob * torch.log(prob + 1e-16)).mean()
                 # entire-image, even distribution among all colors, increase entropy of entire-image color distribution
-                information_loss = (-prob.mean(dim=[2, 3]) * torch.log(prob.mean(dim=[2, 3]) + 1e-16)).mean()
-                loss += self.colormax_ratio * -color_appear_loss + \
-                        self.conf_ratio * confidence_loss + \
-                        self.info_ratio * -information_loss
+                info_loss = (-prob.mean(dim=[2, 3]) * torch.log(prob.mean(dim=[2, 3]) + 1e-16)).mean()
+                loss += self.colormax_ratio * -color_appear_loss + self.conf_ratio * conf_loss + self.info_ratio * -info_loss
+                if self.perceptual_ratio or self.kd_ratio:
+                    # kd loss
+                    kd_loss = self.KD_loss(output, output_target.detach())
+                    # perceptual loss
+                    perceptual_loss = self.MSE_loss(activation[0], activation[1])
+                    loss += self.kd_ratio * kd_loss + self.perceptual_ratio * perceptual_loss
 
             loss.backward()
             optimizer.step()
@@ -99,8 +128,10 @@ class CNNTrainer(BaseTrainer):
         print('Train Epoch: {}, Batch:{}, \tLoss: {:.6f}, Prec: {:.1f}%, Time: {:.3f}'.format(
             epoch, len(data_loader), losses / len(data_loader), 100. * correct / (correct + miss), t_epoch))
         if self.colorcnn:
-            print(f'color_appear_loss: {color_appear_loss.item():.3f}, confidence_loss: {confidence_loss.item():.3f}, '
-                  f'info_loss: {information_loss.item():.3f}')
+            print(f'color_appear_loss: {color_appear_loss.item():.3f}, conf_loss: {conf_loss.item():.3f}, '
+                  f'info_loss: {info_loss.item():.3f}')
+
+        handle.remove()
 
         return losses / len(data_loader), correct / (correct + miss)
 
@@ -177,30 +208,39 @@ class CNNTrainer(BaseTrainer):
         t0 = time.time()
 
         if visualize:
+            classifier_handle = self.classifier.features.register_forward_hook(classifier_activation_hook)
+            classifier_layer = self.classifier.classifier
+            if isinstance(classifier_layer, nn.Sequential):
+                classifier_layer = classifier_layer[-1]
+            weight_softmax = classifier_layer.weight.detach().cpu().numpy()
             if self.colorcnn:
-                self.classifier.features.register_forward_hook(classifier_activation_hook)
-                self.colorcnn.base_global.register_forward_hook(auto_encoder_activation_hook)
-
-                classifier_layer = self.classifier.classifier
-                if isinstance(classifier_layer, nn.Sequential):
-                    classifier_layer = classifier_layer[-1]
-                weight_softmax = classifier_layer.weight.detach().cpu().numpy()
-            else:
-                self.classifier.features.register_forward_hook(classifier_activation_hook)
-
-                classifier_layer = self.classifier.classifier
-                if isinstance(classifier_layer, nn.Sequential):
-                    classifier_layer = classifier_layer[-1]
-                weight_softmax = classifier_layer.weight.detach().cpu().numpy()
+                colorcnn_handle = self.colorcnn.base_global.register_forward_hook(auto_encoder_activation_hook)
 
         for batch_idx, (data, target) in enumerate(test_loader):
             data, target = data.cuda(), target.cuda()
-            if self.colorcnn:
-                with torch.no_grad():
-                    data, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
-            # attack
-            if self.adversarial:
-                data = self.adversarial(data, target)
+            B, C, H, W = data.shape
+            # quantization first
+            if self.sample_trans is None:
+                if self.colorcnn:
+                    with torch.no_grad():
+                        data, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
+                # attack
+                if self.adversarial:
+                    data = self.adversarial(data, target)
+            # adversarial first
+            else:
+                # attack
+                if self.adversarial:
+                    data = self.adversarial(data, target)
+                if self.colorcnn:
+                    with torch.no_grad():
+                        data, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
+                else:
+                    img_list = []
+                    for i in range(B):
+                        img_list.append(self.sample_trans(data[i].cpu()).to(data.device))
+                    data = torch.stack(img_list, dim=0)
+
             with torch.no_grad():
                 output = self.classifier(data)
             pred = torch.argmax(output, 1)
@@ -230,9 +270,13 @@ class CNNTrainer(BaseTrainer):
                                                                        100. * correct / (correct + miss),
                                                                        time.time() - t0))
         if self.colorcnn:
-            B, C, H, W = data.shape
             print(f'Average number of colors per image: {number_of_colors / dataset_size}; \n'
                   f'Average image size: {buffer_size_counter / dataset_size:.1f}; '
                   f'Bit per pixel: {buffer_size_counter / dataset_size / H / W:.3f}')
+
+        if visualize:
+            classifier_handle.remove()
+            if self.colorcnn:
+                colorcnn_handle.remove()
 
         return losses / len(test_loader), correct / (correct + miss)

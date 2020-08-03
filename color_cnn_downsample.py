@@ -14,7 +14,6 @@ import torch.optim as optim
 from torchvision import datasets
 import color_distillation.utils.transforms as T
 from color_distillation import models
-from color_distillation.loss.label_smooth import LSR_loss
 from color_distillation.models.color_cnn import ColorCNN
 from color_distillation.trainer import CNNTrainer
 from color_distillation.utils.load_checkpoint import checkpoint_loader
@@ -35,14 +34,14 @@ def main(args):
 
     # dataset
     data_path = os.path.expanduser('~/Data/') + args.dataset
+    normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     if args.dataset == 'svhn':
         H, W, C = 32, 32, 3
         num_class = 10
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         train_trans = T.Compose([T.ToTensor(), normalize, ])
         test_trans = T.Compose([T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         train_set = datasets.SVHN(data_path, split='train', download=True, transform=train_trans)
         test_set = datasets.SVHN(data_path, split='test', download=True, transform=test_trans)
@@ -50,10 +49,8 @@ def main(args):
         H, W, C = 32, 32, 3
         num_class = 10 if args.dataset == 'cifar10' else 100
 
-        normalize = T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
         train_trans = T.Compose([T.RandomCrop(32, padding=4), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
         test_trans = T.Compose([T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
 
         if args.dataset == 'cifar10':
             train_set = datasets.CIFAR10(data_path, train=True, download=True, transform=train_trans)
@@ -65,10 +62,8 @@ def main(args):
         H, W, C = 224, 224, 3
         num_class = 1000
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         train_trans = T.Compose([T.RandomResizedCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
         test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         train_set = datasets.ImageNet(data_path, split='train', transform=train_trans)
         test_set = datasets.ImageNet(data_path, split='val', transform=test_trans)
@@ -78,10 +73,8 @@ def main(args):
         # smaller batch size
         args.batch_size = 32
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         train_trans = T.Compose([T.RandomCrop(96, padding=12), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
         test_trans = T.Compose([T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         train_set = datasets.STL10(data_path, split='train', download=True, transform=train_trans)
         test_set = datasets.STL10(data_path, split='test', download=True, transform=test_trans)
@@ -89,10 +82,8 @@ def main(args):
         H, W, C = 64, 64, 3
         num_class = 200
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         train_trans = T.Compose([T.RandomCrop(64, padding=8), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
         test_trans = T.Compose([T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans)
         test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
@@ -142,19 +133,14 @@ def main(args):
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
     #                                                 steps_per_epoch=len(train_loader), epochs=args.epochs)
 
-    # loss
-    if args.label_smooth:
-        criterion = LSR_loss(args.label_smooth)
-    else:
-        criterion = nn.CrossEntropyLoss()
-
     # first test the pre-trained classifier
     print('Test the pre-trained classifier...')
-    trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), denormalizer=denormalizer, sample_method='og_img')
+    trainer = CNNTrainer(classifier, denormalizer=denormalizer, sample_method='og_img')
     trainer.test(test_loader, visualize=args.visualize)
 
     # then train ColorCNN
-    trainer = CNNTrainer(classifier, criterion, model, denormalizer=denormalizer,
+    trainer = CNNTrainer(classifier, model, denormalizer=denormalizer, label_smooth=args.label_smooth,
+                         kd_ratio=args.kd_ratio, perceptual_ratio=args.perceptual_ratio,
                          colormax_ratio=args.colormax_ratio, conf_ratio=args.conf_ratio, info_ratio=args.info_ratio)
 
     def test(test_mode='test_cluster'):
@@ -172,12 +158,9 @@ def main(args):
         print('Train ColorCNN...')
         for epoch in tqdm(range(1, args.epochs + 1)):
             print('Training...')
-            trainer.train(epoch, train_loader, optimizer, args.num_colors,
-                          args.log_interval, scheduler)
-            if args.num_colors < 0:
-                if epoch % args.steps == 0:
-                    test(test_mode='test')
-            else:
+            num_colors = 2 ** (epoch % int(np.log2(-args.num_colors)) + 1)
+            trainer.train(epoch, train_loader, optimizer, num_colors, args.log_interval, scheduler)
+            if epoch % 20 == 0:
                 test(test_mode='test')
         # save
         torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
@@ -193,8 +176,7 @@ def main(args):
     # test(test_mode='test_cluster')
     # with adversarial
     if args.adversarial:
-        trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), model, adversarial=args.adversarial,
-                             denormalizer=denormalizer)
+        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, denormalizer=denormalizer)
         print(f'Test using per-pixel classification [adversarial: {args.adversarial}]...')
         test(test_mode='test')
         # print(f'Test using clustering [adversarial: {args.adversarial}]...')
@@ -202,13 +184,20 @@ def main(args):
 
     # at last test the pre-trained classifier again
     print('Test the pre-trained classifier...')
-    trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), denormalizer=denormalizer, sample_method='og_img')
+    trainer = CNNTrainer(classifier, denormalizer=denormalizer, sample_method='og_img')
     trainer.test(test_loader, visualize=args.visualize)
 
     # with adversarial
     if args.adversarial:
-        trainer = CNNTrainer(classifier, nn.CrossEntropyLoss(), adversarial=args.adversarial,
-                             denormalizer=denormalizer, sample_method='og_img')
+        print('********************    [adversarial first]    ********************')
+        trainer = CNNTrainer(classifier, adversarial=args.adversarial, denormalizer=denormalizer,
+                             sample_method='og_img', sample_trans='colorcnn')
+        print(f'Test the pre-trained classifier [adversarial: {args.adversarial}]...')
+        trainer.test(test_loader, visualize=args.visualize)
+
+        print('********************    [quantization first]    ********************')
+        trainer = CNNTrainer(classifier, adversarial=args.adversarial, denormalizer=denormalizer,
+                             sample_method='og_img')
         print(f'Test the pre-trained classifier [adversarial: {args.adversarial}]...')
         trainer.test(test_loader, visualize=args.visualize)
 
@@ -218,17 +207,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
     parser.add_argument('--bottleneck_channel', type=int, default=None)
-    parser.add_argument('--colormax_ratio', type=float, default=1, help='ensure all colors present')
-    parser.add_argument('--conf_ratio', type=float, default=0,
+    parser.add_argument('--kd_ratio', type=float, default=0.0, help='knowledge distillation loss')
+    parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
+    parser.add_argument('--colormax_ratio', type=float, default=1.0, help='ensure all colors present')
+    parser.add_argument('--conf_ratio', type=float, default=0.0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
-    parser.add_argument('--info_ratio', type=float, default=0,
+    parser.add_argument('--info_ratio', type=float, default=0.0,
                         help='even distribution among all colors, increase entropy of entire-image color distribution')
     parser.add_argument('--color_jitter', type=float, default=1.0)
     parser.add_argument('--color_norm', type=float, default=4.0, help='normalizer for color palette')
     parser.add_argument('--color_dropout', type=float, default=0.0, help='dropout for color palette')
     parser.add_argument('--gaussian_noise', type=float, default=0.0, help='gaussian noise on quantized image')
     parser.add_argument('--label_smooth', type=float, default=0.0)
-    parser.add_argument('--temperature', type=float, default=1, help='temperature for softmax')
+    parser.add_argument('--temperature', type=float, default=1.0, help='temperature for softmax')
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
@@ -247,7 +238,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--train_classifier', action='store_true')
     parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
+    parser.add_argument('--seed', type=int, default=1, help='random seed (default: None)')
     args = parser.parse_args()
 
     main(args)

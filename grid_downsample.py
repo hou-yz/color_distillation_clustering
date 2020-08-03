@@ -44,31 +44,38 @@ def main(args):
     og_trans = [T.PNGCompression(buffer_size_counter)]
     if args.sample_type == 'mcut':
         sample_trans = [T.MedianCut(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
+        test_sample_trans = T.MedianCut(args.num_colors, args.dither)
         if args.dither: args.sample_type += '_dither'
     elif args.sample_type == 'octree':
         sample_trans = [T.OCTree(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
+        test_sample_trans = T.OCTree(args.num_colors, args.dither)
         if args.dither: args.sample_type += '_dither'
     elif args.sample_type == 'kmeans':
         sample_trans = [T.KMeans(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
+        test_sample_trans = T.KMeans(args.num_colors, args.dither)
         if args.dither: args.sample_type += '_dither'
     elif args.sample_type == 'jpeg':
         sample_trans = [T.JpegCompression(buffer_size_counter, args.jpeg_ratio)]
+        test_sample_trans = T.JpegCompression(buffer_size_counter, args.jpeg_ratio)
     elif args.sample_type is None:
         sample_trans = [T.PNGCompression(buffer_size_counter)]
+        test_sample_trans = T.PNGCompression(buffer_size_counter)
         args.sample_type = 'og_img'
     else:
         raise Exception
 
     # dataset
     data_path = os.path.expanduser('~/Data/') + args.dataset
+    normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    denormalize = T.Normalize((-0.485 / 0.229, -0.456 / 0.224, -0.406 / 0.255), (1 / 0.229, 1 / 0.224, 1 / 0.255))
+    denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    test_sample_trans = T.Compose([denormalize, T.ToPILImage(), test_sample_trans, T.ToTensor(), normalize])
     if args.dataset == 'svhn':
         num_class = 10
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         sampled_train_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
         og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         sampled_train_set = datasets.SVHN(data_path, split='train', download=True, transform=sampled_train_trans)
         og_test_set = datasets.SVHN(data_path, split='test', download=True, transform=og_test_trans)
@@ -76,12 +83,10 @@ def main(args):
     elif args.dataset == 'cifar10' or args.dataset == 'cifar100':
         num_class = 10 if args.dataset == 'cifar10' else 100
 
-        normalize = T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(32, padding=4),
                                                         T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
         og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
 
         if args.dataset == 'cifar10':
             sampled_train_set = datasets.CIFAR10(data_path, train=True, download=True, transform=sampled_train_trans)
@@ -94,12 +99,10 @@ def main(args):
     elif args.dataset == 'imagenet':
         num_class = 1000
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         sampled_train_trans = T.Compose(sample_trans + [T.RandomResizedCrop(224), T.RandomHorizontalFlip(),
                                                         T.ToTensor(), normalize, ])
         og_test_trans = T.Compose(og_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), normalize, ])
         sampled_test_trans = T.Compose(sample_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         sampled_train_set = datasets.ImageNet(data_path, split='train', transform=sampled_train_trans, )
         og_test_set = datasets.ImageNet(data_path, split='val', transform=og_test_trans)
@@ -109,12 +112,10 @@ def main(args):
         # smaller batch size
         args.batch_size = 32
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(96, padding=12),
                                                         T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
         og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         sampled_train_set = datasets.STL10(data_path, split='train', download=True, transform=sampled_train_trans)
         og_test_set = datasets.STL10(data_path, split='test', download=True, transform=og_test_trans)
@@ -122,12 +123,10 @@ def main(args):
     elif args.dataset == 'tiny200':
         num_class = 200
 
-        normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(64, padding=8), T.RandomHorizontalFlip(),
                                                         T.ToTensor(), normalize, ])
         og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
-        denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
         sampled_train_set = datasets.ImageFolder(data_path + '/train', transform=sampled_train_trans, )
         og_test_set = datasets.ImageFolder(data_path + '/val', transform=og_test_trans)
@@ -165,7 +164,7 @@ def main(args):
     masked_test_loss_s = []
     masked_test_prec_s = []
 
-    trainer = CNNTrainer(model, nn.CrossEntropyLoss(), denormalizer=denormalizer, sample_method=args.sample_type)
+    trainer = CNNTrainer(model, denormalizer=denormalizer, sample_method=args.sample_type)
 
     # learn
     if args.train:
@@ -210,7 +209,16 @@ def main(args):
     buffer_size_counter.reset()
     # with adversarial
     if args.adversarial:
-        trainer = CNNTrainer(model, nn.CrossEntropyLoss(), adversarial=args.adversarial,
+        print('********************    [adversarial first]    ********************')
+        trainer = CNNTrainer(model, adversarial=args.adversarial,
+                             denormalizer=denormalizer, sample_method=args.sample_type, sample_trans=test_sample_trans)
+        print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
+        trainer.test(sampled_test_loader, visualize=args.visualize)
+        print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
+              f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+
+        print('********************    [quantization first]    ********************')
+        trainer = CNNTrainer(model, adversarial=args.adversarial,
                              denormalizer=denormalizer, sample_method=args.sample_type)
         # print(f'Test on original dateset [adversarial: {args.adversarial}]...')
         # trainer.test(og_test_loader)
