@@ -49,13 +49,14 @@ class KMeans(object):
 
 
 class PNGCompression(object):
-    def __init__(self, buffer_size_counter):
+    def __init__(self, buffer_size_counter=None):
         self.buffer_size_counter = buffer_size_counter
 
     def __call__(self, img):
         png_buffer = BytesIO()
         img.save(png_buffer, "PNG")
-        self.buffer_size_counter.update(png_buffer.getbuffer().nbytes)
+        if self.buffer_size_counter:
+            self.buffer_size_counter.update(png_buffer.getbuffer().nbytes)
         return img
 
 

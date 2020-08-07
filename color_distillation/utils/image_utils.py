@@ -4,7 +4,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 
-class img_color_denormalize(object):
+class DeNormalize(object):
     def __init__(self, mean, std):
         self.mean = torch.FloatTensor(mean).view([1, -1, 1, 1]).cuda()
         self.std = torch.FloatTensor(std).view([1, -1, 1, 1]).cuda()
@@ -13,7 +13,7 @@ class img_color_denormalize(object):
         return tensor * self.std + self.mean
 
 
-class img_color_normalize(object):
+class Normalize(object):
     def __init__(self, mean, std):
         self.mean = torch.FloatTensor(mean).view([1, -1, 1, 1]).cuda()
         self.std = torch.FloatTensor(std).view([1, -1, 1, 1]).cuda()

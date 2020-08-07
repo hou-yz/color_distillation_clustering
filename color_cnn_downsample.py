@@ -19,7 +19,7 @@ from color_distillation.trainer import CNNTrainer
 from color_distillation.utils.load_checkpoint import checkpoint_loader
 from color_distillation.utils.draw_curve import draw_curve
 from color_distillation.utils.logger import Logger
-from color_distillation.utils.image_utils import img_color_denormalize
+from color_distillation.utils.image_utils import DeNormalize
 
 
 def main(args):
@@ -35,13 +35,13 @@ def main(args):
     # dataset
     data_path = os.path.expanduser('~/Data/') + args.dataset
     normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-    denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    mean_var = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     if args.dataset == 'svhn':
         H, W, C = 32, 32, 3
         num_class = 10
 
         train_trans = T.Compose([T.ToTensor(), normalize, ])
-        test_trans = T.Compose([T.ToTensor(), normalize, ])
+        test_trans = T.Compose([T.ToTensor(), ])
 
         train_set = datasets.SVHN(data_path, split='train', download=True, transform=train_trans)
         test_set = datasets.SVHN(data_path, split='test', download=True, transform=test_trans)
@@ -50,7 +50,7 @@ def main(args):
         num_class = 10 if args.dataset == 'cifar10' else 100
 
         train_trans = T.Compose([T.RandomCrop(32, padding=4), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        test_trans = T.Compose([T.ToTensor(), normalize, ])
+        test_trans = T.Compose([T.ToTensor(), ])
 
         if args.dataset == 'cifar10':
             train_set = datasets.CIFAR10(data_path, train=True, download=True, transform=train_trans)
@@ -63,7 +63,7 @@ def main(args):
         num_class = 1000
 
         train_trans = T.Compose([T.RandomResizedCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), normalize, ])
+        test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
 
         train_set = datasets.ImageNet(data_path, split='train', transform=train_trans)
         test_set = datasets.ImageNet(data_path, split='val', transform=test_trans)
@@ -74,7 +74,7 @@ def main(args):
         args.batch_size = 32
 
         train_trans = T.Compose([T.RandomCrop(96, padding=12), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        test_trans = T.Compose([T.ToTensor(), normalize, ])
+        test_trans = T.Compose([T.ToTensor(), ])
 
         train_set = datasets.STL10(data_path, split='train', download=True, transform=train_trans)
         test_set = datasets.STL10(data_path, split='test', download=True, transform=test_trans)
@@ -83,7 +83,7 @@ def main(args):
         num_class = 200
 
         train_trans = T.Compose([T.RandomCrop(64, padding=8), T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        test_trans = T.Compose([T.ToTensor(), normalize, ])
+        test_trans = T.Compose([T.ToTensor(), ])
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans)
         test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
@@ -102,7 +102,8 @@ def main(args):
 
     logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/temp{args.temperature}_' \
              f'colormax{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' + \
-             f'jitter{args.color_jitter}_colornorm{args.color_norm}_' + \
+             f'jitter{args.color_jitter}_colornorm{args.color_norm}_kd{args.kd_ratio}_perceptual{args.perceptual_ratio}_' \
+             f'colordrop{args.color_dropout}_bottleneck{args.bottleneck_channel}_' + \
              datetime.datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
     if args.resume is None:
         os.makedirs(logdir, exist_ok=True)
@@ -135,11 +136,11 @@ def main(args):
 
     # first test the pre-trained classifier
     print('Test the pre-trained classifier...')
-    trainer = CNNTrainer(classifier, denormalizer=denormalizer, sample_method='og_img')
+    trainer = CNNTrainer(classifier, mean_var=mean_var, sample_method='og_img')
     trainer.test(test_loader, visualize=args.visualize)
 
     # then train ColorCNN
-    trainer = CNNTrainer(classifier, model, denormalizer=denormalizer, label_smooth=args.label_smooth,
+    trainer = CNNTrainer(classifier, model, mean_var=mean_var, label_smooth=args.label_smooth,
                          kd_ratio=args.kd_ratio, perceptual_ratio=args.perceptual_ratio,
                          colormax_ratio=args.colormax_ratio, conf_ratio=args.conf_ratio, info_ratio=args.info_ratio)
 
@@ -158,8 +159,7 @@ def main(args):
         print('Train ColorCNN...')
         for epoch in tqdm(range(1, args.epochs + 1)):
             print('Training...')
-            num_colors = 2 ** (epoch % int(np.log2(-args.num_colors)) + 1)
-            trainer.train(epoch, train_loader, optimizer, num_colors, args.log_interval, scheduler)
+            trainer.train(epoch, train_loader, optimizer, args.num_colors, args.log_interval, scheduler)
             if epoch % 20 == 0:
                 test(test_mode='test')
         # save
@@ -176,7 +176,13 @@ def main(args):
     # test(test_mode='test_cluster')
     # with adversarial
     if args.adversarial:
-        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, denormalizer=denormalizer)
+        print('********************    [adversarial first]    ********************')
+        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var,
+                             sample_trans='colorcnn')
+        print(f'Test using per-pixel classification [adversarial: {args.adversarial}]...')
+        test(test_mode='test')
+        print('********************    [quantization first]    ********************')
+        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var)
         print(f'Test using per-pixel classification [adversarial: {args.adversarial}]...')
         test(test_mode='test')
         # print(f'Test using clustering [adversarial: {args.adversarial}]...')
@@ -184,19 +190,12 @@ def main(args):
 
     # at last test the pre-trained classifier again
     print('Test the pre-trained classifier...')
-    trainer = CNNTrainer(classifier, denormalizer=denormalizer, sample_method='og_img')
+    trainer = CNNTrainer(classifier, mean_var=mean_var, sample_method='og_img')
     trainer.test(test_loader, visualize=args.visualize)
 
     # with adversarial
     if args.adversarial:
-        print('********************    [adversarial first]    ********************')
-        trainer = CNNTrainer(classifier, adversarial=args.adversarial, denormalizer=denormalizer,
-                             sample_method='og_img', sample_trans='colorcnn')
-        print(f'Test the pre-trained classifier [adversarial: {args.adversarial}]...')
-        trainer.test(test_loader, visualize=args.visualize)
-
-        print('********************    [quantization first]    ********************')
-        trainer = CNNTrainer(classifier, adversarial=args.adversarial, denormalizer=denormalizer,
+        trainer = CNNTrainer(classifier, adversarial=args.adversarial, mean_var=mean_var,
                              sample_method='og_img')
         print(f'Test the pre-trained classifier [adversarial: {args.adversarial}]...')
         trainer.test(test_loader, visualize=args.visualize)
@@ -206,18 +205,18 @@ if __name__ == '__main__':
     # settings
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
-    parser.add_argument('--bottleneck_channel', type=int, default=None)
+    parser.add_argument('--bottleneck_channel', type=int, default=16)
     parser.add_argument('--kd_ratio', type=float, default=0.0, help='knowledge distillation loss')
     parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
     parser.add_argument('--colormax_ratio', type=float, default=1.0, help='ensure all colors present')
-    parser.add_argument('--conf_ratio', type=float, default=0.0,
+    parser.add_argument('--conf_ratio', type=float, default=1.0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
-    parser.add_argument('--info_ratio', type=float, default=0.0,
+    parser.add_argument('--info_ratio', type=float, default=1.0,
                         help='even distribution among all colors, increase entropy of entire-image color distribution')
     parser.add_argument('--color_jitter', type=float, default=1.0)
     parser.add_argument('--color_norm', type=float, default=4.0, help='normalizer for color palette')
     parser.add_argument('--color_dropout', type=float, default=0.0, help='dropout for color palette')
-    parser.add_argument('--gaussian_noise', type=float, default=0.0, help='gaussian noise on quantized image')
+    parser.add_argument('--gaussian_noise', type=float, default=0.07, help='gaussian noise on quantized image')
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--temperature', type=float, default=1.0, help='temperature for softmax')
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
@@ -227,7 +226,7 @@ if __name__ == '__main__':
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 128)')
-    parser.add_argument('--epochs', type=int, default=120, metavar='N', help='number of epochs to train (default: 10)')
+    parser.add_argument('--epochs', type=int, default=200, metavar='N', help='number of epochs to train (default: 10)')
     parser.add_argument('--steps', type=int, default=20, metavar='N', help='number of steps to train (default: 10)')
     parser.add_argument('--lr', type=float, default=1e-2, metavar='LR', help='learning rate (default: 0.1)')
     parser.add_argument('--weight_decay', type=float, default=5e-4)
@@ -238,7 +237,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--train_classifier', action='store_true')
     parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=1, help='random seed (default: None)')
+    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
     args = parser.parse_args()
 
     main(args)

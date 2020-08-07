@@ -16,7 +16,6 @@ from color_distillation.utils.load_checkpoint import checkpoint_loader
 from color_distillation.utils.draw_curve import draw_curve
 from color_distillation.utils.logger import Logger
 from color_distillation.utils.buffer_size_counter import BufferSizeCounter
-from color_distillation.utils.image_utils import img_color_denormalize
 
 
 def main(args):
@@ -59,7 +58,7 @@ def main(args):
         test_sample_trans = T.JpegCompression(buffer_size_counter, args.jpeg_ratio)
     elif args.sample_type is None:
         sample_trans = [T.PNGCompression(buffer_size_counter)]
-        test_sample_trans = T.PNGCompression(buffer_size_counter)
+        test_sample_trans = T.PNGCompression()
         args.sample_type = 'og_img'
     else:
         raise Exception
@@ -67,15 +66,14 @@ def main(args):
     # dataset
     data_path = os.path.expanduser('~/Data/') + args.dataset
     normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-    denormalize = T.Normalize((-0.485 / 0.229, -0.456 / 0.224, -0.406 / 0.255), (1 / 0.229, 1 / 0.224, 1 / 0.255))
-    denormalizer = img_color_denormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-    test_sample_trans = T.Compose([denormalize, T.ToPILImage(), test_sample_trans, T.ToTensor(), normalize])
+    mean_var = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    test_sample_trans = T.Compose([T.ToPILImage(), test_sample_trans, T.ToTensor()])
     if args.dataset == 'svhn':
         num_class = 10
 
         sampled_train_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
-        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
+        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         sampled_train_set = datasets.SVHN(data_path, split='train', download=True, transform=sampled_train_trans)
         og_test_set = datasets.SVHN(data_path, split='test', download=True, transform=og_test_trans)
@@ -85,8 +83,8 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(32, padding=4),
                                                         T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
-        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
+        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         if args.dataset == 'cifar10':
             sampled_train_set = datasets.CIFAR10(data_path, train=True, download=True, transform=sampled_train_trans)
@@ -101,8 +99,8 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomResizedCrop(224), T.RandomHorizontalFlip(),
                                                         T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), normalize, ])
-        sampled_test_trans = T.Compose(sample_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), normalize, ])
+        og_test_trans = T.Compose(og_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
+        sampled_test_trans = T.Compose(sample_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
 
         sampled_train_set = datasets.ImageNet(data_path, split='train', transform=sampled_train_trans, )
         og_test_set = datasets.ImageNet(data_path, split='val', transform=og_test_trans)
@@ -114,8 +112,8 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(96, padding=12),
                                                         T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
-        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
+        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         sampled_train_set = datasets.STL10(data_path, split='train', download=True, transform=sampled_train_trans)
         og_test_set = datasets.STL10(data_path, split='test', download=True, transform=og_test_trans)
@@ -125,8 +123,8 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(64, padding=8), T.RandomHorizontalFlip(),
                                                         T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), normalize, ])
-        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
+        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         sampled_train_set = datasets.ImageFolder(data_path + '/train', transform=sampled_train_trans, )
         og_test_set = datasets.ImageFolder(data_path + '/val', transform=og_test_trans)
@@ -164,7 +162,7 @@ def main(args):
     masked_test_loss_s = []
     masked_test_prec_s = []
 
-    trainer = CNNTrainer(model, denormalizer=denormalizer, sample_method=args.sample_type)
+    trainer = CNNTrainer(model, mean_var=mean_var, sample_method=args.sample_type)
 
     # learn
     if args.train:
@@ -211,15 +209,16 @@ def main(args):
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
         trainer = CNNTrainer(model, adversarial=args.adversarial,
-                             denormalizer=denormalizer, sample_method=args.sample_type, sample_trans=test_sample_trans)
+                             mean_var=mean_var, sample_method=args.sample_type, sample_trans=test_sample_trans)
         print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
-        trainer.test(sampled_test_loader, visualize=args.visualize)
+        trainer.test(og_test_loader, visualize=args.visualize)
         print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
               f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+        buffer_size_counter.reset()
 
         print('********************    [quantization first]    ********************')
         trainer = CNNTrainer(model, adversarial=args.adversarial,
-                             denormalizer=denormalizer, sample_method=args.sample_type)
+                             mean_var=mean_var, sample_method=args.sample_type)
         # print(f'Test on original dateset [adversarial: {args.adversarial}]...')
         # trainer.test(og_test_loader)
         # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '

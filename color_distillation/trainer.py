@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchattacks import attacks
+import foolbox as fb
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
@@ -12,6 +12,7 @@ from color_distillation.loss import LSR_loss, KD_loss
 from color_distillation.models.alexnet import AlexNet
 from color_distillation.models.vgg import VGG
 from color_distillation.models.resnet import ResNet
+from color_distillation.utils.image_utils import Normalize, DeNormalize
 
 
 class BaseTrainer(object):
@@ -20,8 +21,8 @@ class BaseTrainer(object):
 
 
 class CNNTrainer(BaseTrainer):
-    def __init__(self, classifier, colorcnn=None, label_smooth=0.0, adversarial=None, denormalizer=None,
-                 kd_ratio=0.0, perceptual_ratio=0.0,
+    def __init__(self, classifier, colorcnn=None, label_smooth=0.0, adversarial=None, epsilon=2 / 255,
+                 mean_var=None, kd_ratio=0.0, perceptual_ratio=0.0,
                  colormax_ratio=0.0, conf_ratio=0.0, info_ratio=0.0, sample_method=None, sample_trans=None):
         super(BaseTrainer, self).__init__()
         self.classifier = classifier
@@ -32,22 +33,28 @@ class CNNTrainer(BaseTrainer):
         self.KD_loss = KD_loss()
         self.MSE_loss = nn.MSELoss()
         self.colorcnn = colorcnn
-        self.denormalizer = denormalizer
         self.kd_ratio, self.perceptual_ratio, self.colormax_ratio, self.conf_ratio, self.info_ratio = \
             kd_ratio, perceptual_ratio, colormax_ratio, conf_ratio, info_ratio
         self.sample_method = sample_method
         if colorcnn is not None:
             self.sample_method = 'colorcnn'
+        self.normalize = Normalize(mean_var[0], mean_var[1])
+        self.denormalize = DeNormalize(mean_var[0], mean_var[1])
+        # self.denormalize = Normalize(-mean_var[0] / mean_var[1], 1 / mean_var[1])
+        if adversarial:
+            self.fclassifier = fb.PyTorchModel(self.classifier, bounds=(0, 1),
+                                               preprocessing=dict(mean=mean_var[0], std=mean_var[1], axis=-3))
         if adversarial == 'fgsm':
-            self.adversarial = attacks.FGSM(self.classifier)
+            self.adversarial = fb.attacks.LinfFastGradientAttack()
         elif adversarial == 'deepfool':
-            self.adversarial = attacks.DeepFool(self.classifier)
+            self.adversarial = fb.attacks.LinfDeepFoolAttack()
         elif adversarial == 'bim':
-            self.adversarial = attacks.BIM(self.classifier)
+            self.adversarial = fb.attacks.LinfBasicIterativeAttack()
         elif adversarial == 'cw':
-            self.adversarial = attacks.CW(self.classifier)
+            self.adversarial = fb.attacks.L2CarliniWagnerAttack(steps=10)
         else:
             self.adversarial = None
+        self.epsilon = epsilon
         self.sample_trans = sample_trans
 
     def train(self, epoch, data_loader, optimizer, num_colors=None, log_interval=100, cyclic_scheduler=None, ):
@@ -69,9 +76,7 @@ class CNNTrainer(BaseTrainer):
             handle = self.classifier.layer4.register_forward_hook(cnn_activation_hook)
         else:
             raise Exception
-        losses = 0
-        correct = 0
-        miss = 0
+        losses, correct, miss = 0, 0, 0
         num_colors_batch = num_colors
         t0 = time.time()
         for batch_idx, (data, target) in enumerate(data_loader):
@@ -80,7 +85,7 @@ class CNNTrainer(BaseTrainer):
             optimizer.zero_grad()
             if self.colorcnn:
                 # negative #color refers to multiple setting one model, thus needs random setting during training
-                if num_colors_batch < 0:
+                if num_colors_batch < 0 or (num_colors < 0 and batch_idx % 20 == 0):
                     num_colors_batch = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
                 transformed_img, prob, color_palette = self.colorcnn(data, num_colors_batch)
                 output = self.classifier(transformed_img)
@@ -146,13 +151,13 @@ class CNNTrainer(BaseTrainer):
 
         def visualize_img(i):
             if self.colorcnn:
-                og_img = self.denormalizer(data[i]).cpu().numpy().squeeze().transpose([1, 2, 0])
+                og_img = data_og[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(og_img)
                 plt.show()
                 og_img = Image.fromarray((og_img * 255).astype('uint8')).resize((512, 512))
                 og_img.save('og_img.png')
 
-                downsampled_img = self.denormalizer(data[i]).cpu().numpy().squeeze().transpose([1, 2, 0])
+                downsampled_img = data_colorcnn[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
                 downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512))
@@ -171,7 +176,7 @@ class CNNTrainer(BaseTrainer):
                 # plt.savefig("M.png", bbox_inches='tight')
                 # plt.show()
             else:
-                downsampled_img = self.denormalizer(data[i]).cpu().numpy().squeeze().transpose([1, 2, 0])
+                downsampled_img = data_og[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
                 downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512))
@@ -196,15 +201,11 @@ class CNNTrainer(BaseTrainer):
             # fig.savefig("activation.png", )
             # fig.show()
 
-        buffer_size_counter = 0
-        number_of_colors = 0
-        dataset_size = 0
+        buffer_size_counter, number_of_colors, dataset_size = 0, 0, 0
         self.classifier.eval()
         if self.colorcnn:
             self.colorcnn.eval()
-        losses = 0
-        correct = 0
-        miss = 0
+        losses, correct, miss = 0, 0, 0
         t0 = time.time()
 
         if visualize:
@@ -218,29 +219,37 @@ class CNNTrainer(BaseTrainer):
 
         for batch_idx, (data, target) in enumerate(test_loader):
             data, target = data.cuda(), target.cuda()
+            data_og = data.clone()
             B, C, H, W = data.shape
             # quantization first
             if self.sample_trans is None:
                 if self.colorcnn:
                     with torch.no_grad():
+                        data = self.normalize(data)
                         data, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
+                        data = self.denormalize(data)
+                        data_colorcnn = data.clone()
                 # attack
                 if self.adversarial:
-                    data = self.adversarial(data, target)
+                    data, _, _ = self.adversarial(self.fclassifier, data, target, epsilons=self.epsilon)
             # adversarial first
             else:
                 # attack
                 if self.adversarial:
-                    data = self.adversarial(data, target)
+                    data, _, _ = self.adversarial(self.fclassifier, data, target, epsilons=self.epsilon)
                 if self.colorcnn:
                     with torch.no_grad():
+                        data = self.normalize(data)
                         data, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
+                        data = self.denormalize(data)
+                        data_colorcnn = data.clone()
                 else:
                     img_list = []
                     for i in range(B):
                         img_list.append(self.sample_trans(data[i].cpu()).to(data.device))
                     data = torch.stack(img_list, dim=0)
 
+            data = self.normalize(data)
             with torch.no_grad():
                 output = self.classifier(data)
             pred = torch.argmax(output, 1)
@@ -253,7 +262,7 @@ class CNNTrainer(BaseTrainer):
                 M = torch.argmax(prob, dim=1, keepdim=True)  # argmax color index map
                 for i in range(target.shape[0]):
                     number_of_colors += len(M[0].unique())
-                    downsampled_img = self.denormalizer(data[i]).cpu().numpy().squeeze().transpose([1, 2, 0])
+                    downsampled_img = data_colorcnn[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                     downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8'))
 
                     png_buffer = BytesIO()

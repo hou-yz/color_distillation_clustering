@@ -31,7 +31,7 @@ class ColorCNN(nn.Module):
                                         nn.Conv2d(64, 64, 1), nn.BatchNorm2d(64), nn.ReLU(),
                                         nn.Conv2d(64, 64, 1), nn.BatchNorm2d(64), nn.ReLU(), )
         # support color quantization into 256 colors at most
-        self.color_mask = nn.Sequential(nn.Conv2d(bottleneck_channel if bottleneck_channel else 64, 256, 1, bias=False))
+        self.color_mask = nn.Conv2d(bottleneck_channel if bottleneck_channel else 64, 256, 1, bias=False)
         self.color_dropout = nn.Dropout3d(p=dropout)
 
     def forward(self, img, num_colors, mode='train'):
