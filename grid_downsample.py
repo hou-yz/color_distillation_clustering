@@ -40,7 +40,6 @@ def main(args):
         raise Exception
 
     buffer_size_counter = BufferSizeCounter()
-    og_trans = [T.PNGCompression(buffer_size_counter)]
     if args.sample_type == 'mcut':
         sample_trans = [T.MedianCut(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
         test_sample_trans = T.MedianCut(args.num_colors, args.dither)
@@ -58,7 +57,7 @@ def main(args):
         test_sample_trans = T.JpegCompression(buffer_size_counter, args.jpeg_ratio)
     elif args.sample_type is None:
         sample_trans = [T.PNGCompression(buffer_size_counter)]
-        test_sample_trans = T.PNGCompression()
+        test_sample_trans = T.PNGCompression(buffer_size_counter)
         args.sample_type = 'og_img'
     else:
         raise Exception
@@ -72,7 +71,7 @@ def main(args):
         num_class = 10
 
         sampled_train_trans = T.Compose(sample_trans + [T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        og_test_trans = T.Compose([T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         sampled_train_set = datasets.SVHN(data_path, split='train', download=True, transform=sampled_train_trans)
@@ -83,7 +82,7 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(32, padding=4),
                                                         T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        og_test_trans = T.Compose([T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         if args.dataset == 'cifar10':
@@ -99,7 +98,7 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomResizedCrop(224), T.RandomHorizontalFlip(),
                                                         T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
+        og_test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
 
         sampled_train_set = datasets.ImageNet(data_path, split='train', transform=sampled_train_trans, )
@@ -112,7 +111,7 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(96, padding=12),
                                                         T.RandomHorizontalFlip(), T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        og_test_trans = T.Compose([T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         sampled_train_set = datasets.STL10(data_path, split='train', download=True, transform=sampled_train_trans)
@@ -123,7 +122,7 @@ def main(args):
 
         sampled_train_trans = T.Compose(sample_trans + [T.RandomCrop(64, padding=8), T.RandomHorizontalFlip(),
                                                         T.ToTensor(), normalize, ])
-        og_test_trans = T.Compose(og_trans + [T.ToTensor(), ])
+        og_test_trans = T.Compose([T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
         sampled_train_set = datasets.ImageFolder(data_path + '/train', transform=sampled_train_trans, )

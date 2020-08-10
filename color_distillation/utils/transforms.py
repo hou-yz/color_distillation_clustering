@@ -55,7 +55,7 @@ class PNGCompression(object):
     def __call__(self, img):
         png_buffer = BytesIO()
         img.save(png_buffer, "PNG")
-        if self.buffer_size_counter:
+        if self.buffer_size_counter is not None:
             self.buffer_size_counter.update(png_buffer.getbuffer().nbytes)
         return img
 

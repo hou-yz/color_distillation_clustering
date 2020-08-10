@@ -216,7 +216,7 @@ if __name__ == '__main__':
     parser.add_argument('--color_jitter', type=float, default=1.0)
     parser.add_argument('--color_norm', type=float, default=4.0, help='normalizer for color palette')
     parser.add_argument('--color_dropout', type=float, default=0.0, help='dropout for color palette')
-    parser.add_argument('--gaussian_noise', type=float, default=0.07, help='gaussian noise on quantized image')
+    parser.add_argument('--gaussian_noise', type=float, default=0.0, help='gaussian noise on quantized image')
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--temperature', type=float, default=1.0, help='temperature for softmax')
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
