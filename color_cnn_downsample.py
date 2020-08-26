@@ -6,6 +6,7 @@ import sys
 import shutil
 from distutils.dir_util import copy_tree
 import datetime
+import random
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -27,8 +28,11 @@ def main(args):
     if args.seed is not None:
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        torch.cuda.manual_seed(args.seed)
+        random.seed(args.seed)
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.benchmark = True
     else:
         torch.backends.cudnn.benchmark = True
 
@@ -97,11 +101,11 @@ def main(args):
 
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=True,
                                                num_workers=args.num_workers, pin_memory=True)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size, shuffle=False,
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size * 2, shuffle=False,
                                               num_workers=args.num_workers, pin_memory=True)
 
     logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/temp{args.temperature}_' \
-             f'colormax{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' + \
+             f'colormax{args.colormax_ratio}_colorvar{args.colorvar_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' + \
              f'jitter{args.color_jitter}_colornorm{args.color_norm}_kd{args.kd_ratio}_perceptual{args.perceptual_ratio}_' \
              f'colordrop{args.color_dropout}_bottleneck{args.bottleneck_channel}_' + \
              datetime.datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
@@ -142,7 +146,8 @@ def main(args):
     # then train ColorCNN
     trainer = CNNTrainer(classifier, model, mean_var=mean_var, label_smooth=args.label_smooth,
                          kd_ratio=args.kd_ratio, perceptual_ratio=args.perceptual_ratio,
-                         colormax_ratio=args.colormax_ratio, conf_ratio=args.conf_ratio, info_ratio=args.info_ratio)
+                         colormax_ratio=args.colormax_ratio, colorvar_ratio=args.colorvar_ratio,
+                         conf_ratio=args.conf_ratio, info_ratio=args.info_ratio)
 
     def test(test_mode='test_cluster'):
         if args.num_colors > 0:
@@ -161,7 +166,7 @@ def main(args):
             print('Training...')
             trainer.train(epoch, train_loader, optimizer, args.num_colors, args.log_interval, scheduler)
             if epoch % 20 == 0:
-                test(test_mode='test')
+                test(test_mode=args.mode)
         # save
         torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
     else:
@@ -171,22 +176,20 @@ def main(args):
     # test
     model.eval()
     print('Test using per-pixel classification...')
-    test(test_mode='test')
+    test(test_mode=args.mode)
     # print('Test using clustering...')
     # test(test_mode='test_cluster')
     # with adversarial
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
-        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var,
-                             sample_trans='colorcnn')
-        print(f'Test using per-pixel classification [adversarial: {args.adversarial}]...')
-        test(test_mode='test')
-        print('********************    [quantization first]    ********************')
-        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var)
-        print(f'Test using per-pixel classification [adversarial: {args.adversarial}]...')
-        test(test_mode='test')
-        # print(f'Test using clustering [adversarial: {args.adversarial}]...')
-        # test(test_mode='test_cluster')
+        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, epsilon=args.epsilon,
+                             mean_var=mean_var, sample_trans='colorcnn')
+        print(f'Test in {args.mode} mode [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
+        test(test_mode=args.mode)
+        # print('********************    [quantization first]    ********************')
+        # trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var)
+        # print(f'Test in {args.mode} mode [adversarial: {args.adversarial}]...')
+        test(test_mode=args.mode)
 
     # at last test the pre-trained classifier again
     print('Test the pre-trained classifier...')
@@ -195,9 +198,9 @@ def main(args):
 
     # with adversarial
     if args.adversarial:
-        trainer = CNNTrainer(classifier, adversarial=args.adversarial, mean_var=mean_var,
-                             sample_method='og_img')
-        print(f'Test the pre-trained classifier [adversarial: {args.adversarial}]...')
+        trainer = CNNTrainer(classifier, adversarial=args.adversarial, epsilon=args.epsilon,
+                             mean_var=mean_var, sample_method='og_img')
+        print(f'Test the pre-trained classifier [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
         trainer.test(test_loader, visualize=args.visualize)
 
 
@@ -206,9 +209,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
     parser.add_argument('--bottleneck_channel', type=int, default=16)
+    parser.add_argument('--mode', type=str, default='classify', choices=['cluster', 'classify'])
     parser.add_argument('--kd_ratio', type=float, default=0.0, help='knowledge distillation loss')
     parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
     parser.add_argument('--colormax_ratio', type=float, default=1.0, help='ensure all colors present')
+    parser.add_argument('--colorvar_ratio', type=float, default=0.0, help='color palette choose different colors')
     parser.add_argument('--conf_ratio', type=float, default=1.0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
     parser.add_argument('--info_ratio', type=float, default=1.0,
@@ -220,6 +225,7 @@ if __name__ == '__main__':
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--temperature', type=float, default=1.0, help='temperature for softmax')
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
+    parser.add_argument('--epsilon', default=2, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
@@ -237,7 +243,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--train_classifier', action='store_true')
     parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
+    parser.add_argument('--seed', type=int, default=0, help='random seed (default: None)')
     args = parser.parse_args()
 
     main(args)

@@ -37,6 +37,7 @@ class ColorCNN(nn.Module):
     def forward(self, img, num_colors, mode='train'):
         B, _, H, W = img.shape
         feat = self.bottleneck(self.base_global(img))
+        # feat = img
         # global_local_weight = self.base_attention(torch.ones([B, 1]).to(img.device) * num_colors)
         # feat = self.bottleneck(self.base_global(img)) + self.base_local(img)
         m = self.color_mask(feat)
@@ -59,7 +60,8 @@ class ColorCNN(nn.Module):
                     # x_norm = (x ** 2).sum(1).view(-1, 1)
                     # dist = torch.clamp(x_norm + x_norm.permute([1, 0]) - 2.0 * torch.mm(x, x.permute([1, 0])), 0.0,
                     #                    np.inf)
-                    labels = KMeans(n_clusters=num_colors, n_init=1).fit_predict(feat_1d[b].cpu().numpy())
+                    labels = KMeans(n_clusters=num_colors, n_init=1, max_iter=30, tol=1e-2).fit_predict(
+                        feat_1d[b].cpu().numpy())
                     M[b] = torch.from_numpy(labels.reshape([1, H, W]))
             indicator_M = torch.zeros_like(m).scatter(1, M, 1)
             color_palette = (img.unsqueeze(2) * indicator_M.unsqueeze(1)).sum(dim=[3, 4], keepdim=True) / (

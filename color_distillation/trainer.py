@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision.utils import save_image, make_grid
 import foolbox as fb
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -21,9 +22,10 @@ class BaseTrainer(object):
 
 
 class CNNTrainer(BaseTrainer):
-    def __init__(self, classifier, colorcnn=None, label_smooth=0.0, adversarial=None, epsilon=2 / 255,
+    def __init__(self, classifier, colorcnn=None, label_smooth=0.0, adversarial=None, epsilon=2,
                  mean_var=None, kd_ratio=0.0, perceptual_ratio=0.0,
-                 colormax_ratio=0.0, conf_ratio=0.0, info_ratio=0.0, sample_method=None, sample_trans=None):
+                 colormax_ratio=0.0, colorvar_ratio=0.0,
+                 conf_ratio=0.0, info_ratio=0.0, sample_method=None, sample_trans=None):
         super(BaseTrainer, self).__init__()
         self.classifier = classifier
         if label_smooth:
@@ -33,8 +35,8 @@ class CNNTrainer(BaseTrainer):
         self.KD_loss = KD_loss()
         self.MSE_loss = nn.MSELoss()
         self.colorcnn = colorcnn
-        self.kd_ratio, self.perceptual_ratio, self.colormax_ratio, self.conf_ratio, self.info_ratio = \
-            kd_ratio, perceptual_ratio, colormax_ratio, conf_ratio, info_ratio
+        self.kd_ratio, self.perceptual_ratio, self.colormax_ratio, self.colorvar_ratio, self.conf_ratio, self.info_ratio = \
+            kd_ratio, perceptual_ratio, colormax_ratio, colorvar_ratio, conf_ratio, info_ratio
         self.sample_method = sample_method
         if colorcnn is not None:
             self.sample_method = 'colorcnn'
@@ -54,7 +56,7 @@ class CNNTrainer(BaseTrainer):
             self.adversarial = fb.attacks.L2CarliniWagnerAttack(steps=10)
         else:
             self.adversarial = None
-        self.epsilon = epsilon
+        self.epsilon = epsilon / 255
         self.sample_trans = sample_trans
 
     def train(self, epoch, data_loader, optimizer, num_colors=None, log_interval=100, cyclic_scheduler=None, ):
@@ -98,14 +100,17 @@ class CNNTrainer(BaseTrainer):
             miss += target.shape[0] - pred.eq(target).sum().item()
             loss = self.CE_loss(output, target)
             if self.colorcnn:
-                # regularization
                 B, _, H, W = data.shape
+                # all colors taken
                 color_appear_loss = prob.view([B, -1, H * W]).max(dim=2)[0].mean()
+                # color palette choose different colors
+                color_var_loss = color_palette.squeeze().std(dim=2).mean()
                 # per-pixel, higher confidence, reduce entropy of per-pixel color distribution
                 conf_loss = (-prob * torch.log(prob + 1e-16)).mean()
                 # entire-image, even distribution among all colors, increase entropy of entire-image color distribution
                 info_loss = (-prob.mean(dim=[2, 3]) * torch.log(prob.mean(dim=[2, 3]) + 1e-16)).mean()
-                loss += self.colormax_ratio * -color_appear_loss + self.conf_ratio * conf_loss + self.info_ratio * -info_loss
+                loss += self.colormax_ratio * -color_appear_loss + self.colorvar_ratio * -color_var_loss + \
+                        self.conf_ratio * conf_loss + self.info_ratio * -info_loss
                 if self.perceptual_ratio or self.kd_ratio:
                     # kd loss
                     kd_loss = self.KD_loss(output, output_target.detach())
@@ -150,7 +155,14 @@ class CNNTrainer(BaseTrainer):
             activation['auto_encoder'] = output.cpu().detach().numpy()
 
         def visualize_img(i):
+            def save_img_batch(img):
+                index = [4, 13, 23, 24, 26, 37, 46, 55]
+                image_grid = make_grid(img[index], nrow=1, normalize=True)
+                # Arange images along y-axis
+                save_image(image_grid, 'batch_imgs.png', normalize=False)
+
             if self.colorcnn:
+                save_img_batch(data_colorcnn)
                 og_img = data_og[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(og_img)
                 plt.show()
@@ -172,10 +184,11 @@ class CNNTrainer(BaseTrainer):
                 plt.savefig('auto_encoder.png')
                 plt.show()
                 # index map
-                # plt.imshow(M[i, 0].cpu().numpy(), cmap='Blues')
-                # plt.savefig("M.png", bbox_inches='tight')
-                # plt.show()
+                plt.imshow(M[i, 0].cpu().numpy(), cmap='Blues')
+                plt.savefig("M.png", bbox_inches='tight')
+                plt.show()
             else:
+                save_img_batch(data_og)
                 downsampled_img = data_og[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
@@ -189,12 +202,12 @@ class CNNTrainer(BaseTrainer):
             heatmap = cv2.applyColorMap(cam_map, cv2.COLORMAP_JET)
             downsampled_img = cv2.cvtColor(np.asarray(downsampled_img), cv2.COLOR_RGB2BGR)
             cam_result = np.uint8(heatmap * 0.3 + downsampled_img * 0.5)
-            cam_result = cv2.putText(cam_result, '{:.1f}%, {}'.format(
-                100 * F.softmax(output, dim=1)[i, target[i]].item(),
-                'Success' if pred.eq(target)[i].item() else 'Failure'),
-                                     (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 2,
-                                     (0, 255, 0) if pred.eq(target)[i].item() else (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.imwrite(self.sample_method + '_cam.jpg', cam_result)
+            # cam_result = cv2.putText(cam_result, '{:.1f}%, {}'.format(
+            #     100 * F.softmax(output, dim=1)[i, target[i]].item(),
+            #     'Success' if pred.eq(target)[i].item() else 'Failure'),
+            #                          (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 2,
+            #                          (0, 255, 0) if pred.eq(target)[i].item() else (0, 0, 255), 2, cv2.LINE_AA)
+            cv2.imwrite(self.sample_method + '_cam.png', cam_result)
             plt.imshow(cv2.cvtColor(cam_result, cv2.COLOR_BGR2RGB))
             plt.show()
             # ax.imshow(cam_map, cmap='viridis', aspect='auto')
@@ -209,7 +222,10 @@ class CNNTrainer(BaseTrainer):
         t0 = time.time()
 
         if visualize:
-            classifier_handle = self.classifier.features.register_forward_hook(classifier_activation_hook)
+            if hasattr(self.classifier, 'features'):
+                classifier_handle = self.classifier.features.register_forward_hook(classifier_activation_hook)
+            else:
+                classifier_handle = self.classifier.layer4.register_forward_hook(classifier_activation_hook)
             classifier_layer = self.classifier.classifier
             if isinstance(classifier_layer, nn.Sequential):
                 classifier_layer = classifier_layer[-1]
@@ -271,8 +287,8 @@ class CNNTrainer(BaseTrainer):
                     dataset_size += 1
             # plotting
             if visualize:
-                if batch_idx == 2:
-                    visualize_img(28)
+                if batch_idx == 0:  # 0,1,4,
+                    visualize_img(0)
                     break
 
         print('Test, Loss: {:.6f}, Prec: {:.1f}%, time: {:.1f}'.format(losses / (len(test_loader) + 1),

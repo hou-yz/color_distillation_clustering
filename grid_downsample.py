@@ -133,9 +133,9 @@ def main(args):
 
     sampled_train_loader = torch.utils.data.DataLoader(sampled_train_set, batch_size=args.batch_size, shuffle=True,
                                                        num_workers=args.num_workers, pin_memory=True)
-    og_test_loader = torch.utils.data.DataLoader(og_test_set, batch_size=args.batch_size, shuffle=False,
+    og_test_loader = torch.utils.data.DataLoader(og_test_set, batch_size=args.batch_size * 2, shuffle=False,
                                                  num_workers=args.num_workers, pin_memory=True)
-    sampled_test_loader = torch.utils.data.DataLoader(sampled_test_set, batch_size=args.batch_size, shuffle=False,
+    sampled_test_loader = torch.utils.data.DataLoader(sampled_test_set, batch_size=args.batch_size * 2, shuffle=False,
                                                       num_workers=args.num_workers, pin_memory=True)
 
     logdir = 'logs/grid/{}/{}/{}colors'.format(args.dataset, args.arch,
@@ -207,26 +207,21 @@ def main(args):
     # with adversarial
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
-        trainer = CNNTrainer(model, adversarial=args.adversarial,
+        trainer = CNNTrainer(model, adversarial=args.adversarial, epsilon=args.epsilon,
                              mean_var=mean_var, sample_method=args.sample_type, sample_trans=test_sample_trans)
-        print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
+        print(f'Test on sampled dateset [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
         trainer.test(og_test_loader, visualize=args.visualize)
         print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
               f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
         buffer_size_counter.reset()
 
-        print('********************    [quantization first]    ********************')
-        trainer = CNNTrainer(model, adversarial=args.adversarial,
-                             mean_var=mean_var, sample_method=args.sample_type)
-        # print(f'Test on original dateset [adversarial: {args.adversarial}]...')
-        # trainer.test(og_test_loader)
+        # print('********************    [quantization first]    ********************')
+        # trainer = CNNTrainer(model, adversarial=args.adversarial,
+        #                      mean_var=mean_var, sample_method=args.sample_type)
+        # print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
+        # trainer.test(sampled_test_loader, visualize=args.visualize)
         # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
         #       f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
-        # buffer_size_counter.reset()
-        print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
-        trainer.test(sampled_test_loader, visualize=args.visualize)
-        print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
-              f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
     pass
 
 
@@ -240,6 +235,7 @@ if __name__ == '__main__':
     parser.add_argument('--jpeg_ratio', type=int, default=None)
     parser.add_argument('--train', action='store_true', default=False)
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
+    parser.add_argument('--epsilon', default=2, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
