@@ -104,7 +104,7 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size * 2, shuffle=False,
                                               num_workers=args.num_workers, pin_memory=True)
 
-    logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/temp{args.temperature}_' \
+    logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/recons{args.recons_ratio}_' \
              f'colormax{args.colormax_ratio}_colorvar{args.colorvar_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' + \
              f'jitter{args.color_jitter}_colornorm{args.color_norm}_kd{args.kd_ratio}_perceptual{args.perceptual_ratio}_' \
              f'colordrop{args.color_dropout}_bottleneck{args.bottleneck_channel}_' + \
@@ -134,17 +134,18 @@ def main(args):
                      args.color_dropout, args.bottleneck_channel).cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.steps, 1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.step_size, 1)
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
     #                                                 steps_per_epoch=len(train_loader), epochs=args.epochs)
 
     # first test the pre-trained classifier
     print('Test the pre-trained classifier...')
-    trainer = CNNTrainer(classifier, mean_var=mean_var, sample_method='og_img')
+    trainer = CNNTrainer(classifier, mean_var=mean_var, sample_name='og_img')
     trainer.test(test_loader, visualize=args.visualize)
 
     # then train ColorCNN
     trainer = CNNTrainer(classifier, model, mean_var=mean_var, label_smooth=args.label_smooth,
+                         recons_ratio=args.recons_ratio,
                          kd_ratio=args.kd_ratio, perceptual_ratio=args.perceptual_ratio,
                          colormax_ratio=args.colormax_ratio, colorvar_ratio=args.colorvar_ratio,
                          conf_ratio=args.conf_ratio, info_ratio=args.info_ratio)
@@ -175,33 +176,19 @@ def main(args):
         model.load_state_dict(torch.load(resume_fname))
     # test
     model.eval()
-    print('Test using per-pixel classification...')
+    print(f'Test in {args.mode} mode...')
     test(test_mode=args.mode)
-    # print('Test using clustering...')
-    # test(test_mode='test_cluster')
     # with adversarial
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
-        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, epsilon=args.epsilon,
-                             mean_var=mean_var, sample_trans='colorcnn')
+        trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, epsilon=args.epsilon, mean_var=mean_var,
+                             sample_trans='colorcnn')
         print(f'Test in {args.mode} mode [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
         test(test_mode=args.mode)
         # print('********************    [quantization first]    ********************')
         # trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var)
         # print(f'Test in {args.mode} mode [adversarial: {args.adversarial}]...')
         test(test_mode=args.mode)
-
-    # at last test the pre-trained classifier again
-    print('Test the pre-trained classifier...')
-    trainer = CNNTrainer(classifier, mean_var=mean_var, sample_method='og_img')
-    trainer.test(test_loader, visualize=args.visualize)
-
-    # with adversarial
-    if args.adversarial:
-        trainer = CNNTrainer(classifier, adversarial=args.adversarial, epsilon=args.epsilon,
-                             mean_var=mean_var, sample_method='og_img')
-        print(f'Test the pre-trained classifier [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
-        trainer.test(test_loader, visualize=args.visualize)
 
 
 if __name__ == '__main__':
@@ -214,6 +201,7 @@ if __name__ == '__main__':
     parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
     parser.add_argument('--colormax_ratio', type=float, default=1.0, help='ensure all colors present')
     parser.add_argument('--colorvar_ratio', type=float, default=0.0, help='color palette choose different colors')
+    parser.add_argument('--recons_ratio', type=float, default=0.0, help='reconstruction loss')
     parser.add_argument('--conf_ratio', type=float, default=1.0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
     parser.add_argument('--info_ratio', type=float, default=1.0,
@@ -233,7 +221,7 @@ if __name__ == '__main__':
     parser.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=200, metavar='N', help='number of epochs to train (default: 10)')
-    parser.add_argument('--steps', type=int, default=20, metavar='N', help='number of steps to train (default: 10)')
+    parser.add_argument('--step_size', type=int, default=20, metavar='N', help='step_size for training (default: 10)')
     parser.add_argument('--lr', type=float, default=1e-2, metavar='LR', help='learning rate (default: 0.1)')
     parser.add_argument('--weight_decay', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')

@@ -23,9 +23,9 @@ class BaseTrainer(object):
 
 class CNNTrainer(BaseTrainer):
     def __init__(self, classifier, colorcnn=None, label_smooth=0.0, adversarial=None, epsilon=2,
-                 mean_var=None, kd_ratio=0.0, perceptual_ratio=0.0,
+                 mean_var=None, recons_ratio=0.0, kd_ratio=0.0, perceptual_ratio=0.0,
                  colormax_ratio=0.0, colorvar_ratio=0.0,
-                 conf_ratio=0.0, info_ratio=0.0, sample_method=None, sample_trans=None):
+                 conf_ratio=0.0, info_ratio=0.0, sample_name=None, sample_trans=None):
         super(BaseTrainer, self).__init__()
         self.classifier = classifier
         if label_smooth:
@@ -35,11 +35,11 @@ class CNNTrainer(BaseTrainer):
         self.KD_loss = KD_loss()
         self.MSE_loss = nn.MSELoss()
         self.colorcnn = colorcnn
-        self.kd_ratio, self.perceptual_ratio, self.colormax_ratio, self.colorvar_ratio, self.conf_ratio, self.info_ratio = \
-            kd_ratio, perceptual_ratio, colormax_ratio, colorvar_ratio, conf_ratio, info_ratio
-        self.sample_method = sample_method
+        self.recons_ratio, self.kd_ratio, self.perceptual_ratio, self.colormax_ratio, self.colorvar_ratio, self.conf_ratio, self.info_ratio = \
+            recons_ratio, kd_ratio, perceptual_ratio, colormax_ratio, colorvar_ratio, conf_ratio, info_ratio
+        self.sample_name = sample_name
         if colorcnn is not None:
-            self.sample_method = 'colorcnn'
+            self.sample_name = 'colorcnn'
         self.normalize = Normalize(mean_var[0], mean_var[1])
         self.denormalize = DeNormalize(mean_var[0], mean_var[1])
         # self.denormalize = Normalize(-mean_var[0] / mean_var[1], 1 / mean_var[1])
@@ -53,7 +53,7 @@ class CNNTrainer(BaseTrainer):
         elif adversarial == 'bim':
             self.adversarial = fb.attacks.LinfBasicIterativeAttack()
         elif adversarial == 'cw':
-            self.adversarial = fb.attacks.L2CarliniWagnerAttack(steps=10)
+            self.adversarial = fb.attacks.L2CarliniWagnerAttack(steps=100)
         else:
             self.adversarial = None
         self.epsilon = epsilon / 255
@@ -109,7 +109,10 @@ class CNNTrainer(BaseTrainer):
                 conf_loss = (-prob * torch.log(prob + 1e-16)).mean()
                 # entire-image, even distribution among all colors, increase entropy of entire-image color distribution
                 info_loss = (-prob.mean(dim=[2, 3]) * torch.log(prob.mean(dim=[2, 3]) + 1e-16)).mean()
-                loss += self.colormax_ratio * -color_appear_loss + self.colorvar_ratio * -color_var_loss + \
+                recons_loss = self.MSE_loss(data, transformed_img)
+                loss += self.recons_ratio * recons_loss * np.log2(num_colors_batch) + \
+                        self.colormax_ratio * -color_appear_loss + \
+                        self.colorvar_ratio * -color_var_loss + \
                         self.conf_ratio * conf_loss + self.info_ratio * -info_loss
                 if self.perceptual_ratio or self.kd_ratio:
                     # kd loss
@@ -138,8 +141,8 @@ class CNNTrainer(BaseTrainer):
         print('Train Epoch: {}, Batch:{}, \tLoss: {:.6f}, Prec: {:.1f}%, Time: {:.3f}'.format(
             epoch, len(data_loader), losses / len(data_loader), 100. * correct / (correct + miss), t_epoch))
         if self.colorcnn:
-            print(f'color_appear_loss: {color_appear_loss.item():.3f}, conf_loss: {conf_loss.item():.3f}, '
-                  f'info_loss: {info_loss.item():.3f}')
+            print(f'recons_loss: {recons_loss.item():.3f}, color_appear_loss: {color_appear_loss.item():.3f}, '
+                  f'conf_loss: {conf_loss.item():.3f}, info_loss: {info_loss.item():.3f}')
 
         handle.remove()
 
@@ -147,6 +150,7 @@ class CNNTrainer(BaseTrainer):
 
     def test(self, test_loader, num_colors=None, visualize=False, test_mode='test'):
         activation = {}
+        recons_loss_list = []
 
         def classifier_activation_hook(module, input, output):
             activation['classifier'] = output.cpu().detach().numpy()
@@ -155,21 +159,22 @@ class CNNTrainer(BaseTrainer):
             activation['auto_encoder'] = output.cpu().detach().numpy()
 
         def visualize_img(i):
-            def save_img_batch(img):
-                index = [4, 13, 23, 24, 26, 37, 46, 55]
-                image_grid = make_grid(img[index], nrow=1, normalize=True)
+            def save_img_batch(img, fname='batch_imgs.png'):
+                # index = [4, 8, 13, 24, 26, 37, 46, 55]
+                index = [28, 31, 40, 43]
+                image_grid = make_grid(img[index], nrow=8, normalize=True)
                 # Arange images along y-axis
-                save_image(image_grid, 'batch_imgs.png', normalize=False)
+                save_image(image_grid, fname, normalize=False)
 
             if self.colorcnn:
-                save_img_batch(data_colorcnn)
-                og_img = data_og[i].cpu().numpy().squeeze().transpose([1, 2, 0])
+                og_img = data[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(og_img)
                 plt.show()
                 og_img = Image.fromarray((og_img * 255).astype('uint8')).resize((512, 512))
                 og_img.save('og_img.png')
 
-                downsampled_img = data_colorcnn[i].cpu().numpy().squeeze().transpose([1, 2, 0])
+                save_img_batch(data_quantized, f'vis/{int(np.log2(num_colors))}bit_colorcnn+.png')
+                downsampled_img = data_quantized[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
                 downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512))
@@ -188,12 +193,13 @@ class CNNTrainer(BaseTrainer):
                 plt.savefig("M.png", bbox_inches='tight')
                 plt.show()
             else:
-                save_img_batch(data_og)
-                downsampled_img = data_og[i].cpu().numpy().squeeze().transpose([1, 2, 0])
+                save_img_batch(data_quantized, f'vis/{int(np.log2(num_colors))}bit_{self.sample_name}.png'
+                if isinstance(num_colors, int) else f'vis/og.png')
+                downsampled_img = data_quantized[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
                 downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512))
-                downsampled_img.save(self.sample_method + '.png')
+                downsampled_img.save(self.sample_name + '.png')
             cam_map = np.sum(activation['classifier'][i] * weight_softmax[pred[i].item()].reshape((-1, 1, 1)), axis=0)
             cam_map = cam_map - np.min(cam_map)
             cam_map = cam_map / np.max(cam_map)
@@ -207,7 +213,7 @@ class CNNTrainer(BaseTrainer):
             #     'Success' if pred.eq(target)[i].item() else 'Failure'),
             #                          (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 2,
             #                          (0, 255, 0) if pred.eq(target)[i].item() else (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.imwrite(self.sample_method + '_cam.png', cam_result)
+            cv2.imwrite(self.sample_name + '_cam.png', cam_result)
             plt.imshow(cv2.cvtColor(cam_result, cv2.COLOR_BGR2RGB))
             plt.show()
             # ax.imshow(cam_map, cmap='viridis', aspect='auto')
@@ -241,33 +247,32 @@ class CNNTrainer(BaseTrainer):
             if self.sample_trans is None:
                 if self.colorcnn:
                     with torch.no_grad():
-                        data = self.normalize(data)
-                        data, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
-                        data = self.denormalize(data)
-                        data_colorcnn = data.clone()
-                # attack
+                        data_quantized, prob, _ = self.colorcnn(self.normalize(data), num_colors, mode=test_mode)
+                        data_quantized = self.denormalize(data_quantized)
+                else:
+                    data_quantized = data
+
                 if self.adversarial:
-                    data, _, _ = self.adversarial(self.fclassifier, data, target, epsilons=self.epsilon)
+                    _, data_quantized, _ = self.adversarial(self.fclassifier, data_quantized, target,
+                                                            epsilons=self.epsilon)
             # adversarial first
             else:
-                # attack
                 if self.adversarial:
-                    data, _, _ = self.adversarial(self.fclassifier, data, target, epsilons=self.epsilon)
+                    _, data, _ = self.adversarial(self.fclassifier, data, target, epsilons=self.epsilon)
                 if self.colorcnn:
                     with torch.no_grad():
-                        data = self.normalize(data)
-                        data, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
-                        data = self.denormalize(data)
-                        data_colorcnn = data.clone()
+                        data_quantized, prob, _ = self.colorcnn(self.normalize(data), num_colors, mode=test_mode)
+                        data_quantized = self.denormalize(data_quantized)
                 else:
                     img_list = []
                     for i in range(B):
                         img_list.append(self.sample_trans(data[i].cpu()).to(data.device))
-                    data = torch.stack(img_list, dim=0)
+                    data_quantized = torch.stack(img_list, dim=0)
 
-            data = self.normalize(data)
+            recons_loss_list.append(self.MSE_loss(self.normalize(data), self.normalize(data_quantized)).item())
+
             with torch.no_grad():
-                output = self.classifier(data)
+                output = self.classifier(self.normalize(data_quantized))
             pred = torch.argmax(output, 1)
             correct += pred.eq(target).sum().item()
             miss += target.shape[0] - pred.eq(target).sum().item()
@@ -278,7 +283,7 @@ class CNNTrainer(BaseTrainer):
                 M = torch.argmax(prob, dim=1, keepdim=True)  # argmax color index map
                 for i in range(target.shape[0]):
                     number_of_colors += len(M[0].unique())
-                    downsampled_img = data_colorcnn[i].cpu().numpy().squeeze().transpose([1, 2, 0])
+                    downsampled_img = data_quantized[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                     downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8'))
 
                     png_buffer = BytesIO()
@@ -287,13 +292,13 @@ class CNNTrainer(BaseTrainer):
                     dataset_size += 1
             # plotting
             if visualize:
-                if batch_idx == 0:  # 0,1,4,
+                if batch_idx == 1:  # 0,1,4,
                     visualize_img(0)
                     break
 
-        print('Test, Loss: {:.6f}, Prec: {:.1f}%, time: {:.1f}'.format(losses / (len(test_loader) + 1),
-                                                                       100. * correct / (correct + miss),
-                                                                       time.time() - t0))
+        print('Test, Loss: {:.6f}, Prec: {:.1f}%, time: {:.1f}, recons loss: {:.3f}'.format(
+            losses / (len(test_loader) + 1), 100. * correct / (correct + miss), time.time() - t0,
+            np.mean(recons_loss_list)))
         if self.colorcnn:
             print(f'Average number of colors per image: {number_of_colors / dataset_size}; \n'
                   f'Average image size: {buffer_size_counter / dataset_size:.1f}; '
