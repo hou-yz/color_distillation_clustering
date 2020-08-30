@@ -40,25 +40,25 @@ def main(args):
         raise Exception
 
     buffer_size_counter = BufferSizeCounter()
-    if args.sample_type == 'mcut':
+    if args.sample_name == 'mcut':
         sample_trans = [T.MedianCut(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
         test_sample_trans = T.MedianCut(args.num_colors, args.dither)
-        if args.dither: args.sample_type += '_dither'
-    elif args.sample_type == 'octree':
+        if args.dither: args.sample_name += '_dither'
+    elif args.sample_name == 'octree':
         sample_trans = [T.OCTree(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
         test_sample_trans = T.OCTree(args.num_colors, args.dither)
-        if args.dither: args.sample_type += '_dither'
-    elif args.sample_type == 'kmeans':
+        if args.dither: args.sample_name += '_dither'
+    elif args.sample_name == 'kmeans':
         sample_trans = [T.KMeans(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
         test_sample_trans = T.KMeans(args.num_colors, args.dither)
-        if args.dither: args.sample_type += '_dither'
-    elif args.sample_type == 'jpeg':
+        if args.dither: args.sample_name += '_dither'
+    elif args.sample_name == 'jpeg':
         sample_trans = [T.JpegCompression(buffer_size_counter, args.jpeg_ratio)]
         test_sample_trans = T.JpegCompression(buffer_size_counter, args.jpeg_ratio)
-    elif args.sample_type is None:
+    elif args.sample_name is None:
         sample_trans = [T.PNGCompression(buffer_size_counter)]
         test_sample_trans = T.PNGCompression(buffer_size_counter)
-        args.sample_type = 'og_img'
+        args.sample_name = 'og_img'
     else:
         raise Exception
 
@@ -151,6 +151,7 @@ def main(args):
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
                                                     steps_per_epoch=len(sampled_train_loader), epochs=args.epochs)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.step_size, 1)
 
     # draw curve
     x_epoch = []
@@ -161,7 +162,7 @@ def main(args):
     masked_test_loss_s = []
     masked_test_prec_s = []
 
-    trainer = CNNTrainer(model, mean_var=mean_var, sample_method=args.sample_type)
+    trainer = CNNTrainer(model, mean_var=mean_var, sample_name=args.sample_name)
 
     # learn
     if args.train:
@@ -194,13 +195,8 @@ def main(args):
     # test
     model.eval()
     # without adversarial
-    # print('Test on original dateset...')
-    # trainer.test(og_test_loader)
-    # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
-    #       f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
-    # buffer_size_counter.reset()
     print('Test on sampled dateset...')
-    trainer.test(sampled_test_loader, visualize=args.visualize)
+    trainer.test(sampled_test_loader, args.num_colors, visualize=args.visualize)
     print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
           f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
     buffer_size_counter.reset()
@@ -208,16 +204,16 @@ def main(args):
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
         trainer = CNNTrainer(model, adversarial=args.adversarial, epsilon=args.epsilon,
-                             mean_var=mean_var, sample_method=args.sample_type, sample_trans=test_sample_trans)
+                             mean_var=mean_var, sample_name=args.sample_name, sample_trans=test_sample_trans)
         print(f'Test on sampled dateset [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
-        trainer.test(og_test_loader, visualize=args.visualize)
+        trainer.test(og_test_loader, args.num_colors, visualize=args.visualize)
         print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
               f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
         buffer_size_counter.reset()
 
         # print('********************    [quantization first]    ********************')
         # trainer = CNNTrainer(model, adversarial=args.adversarial,
-        #                      mean_var=mean_var, sample_method=args.sample_type)
+        #                      mean_var=mean_var, sample_method=args.sample_name)
         # print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
         # trainer.test(sampled_test_loader, visualize=args.visualize)
         # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
@@ -229,7 +225,7 @@ if __name__ == '__main__':
     # settings
     parser = argparse.ArgumentParser(description='Grid-wise down sample')
     parser.add_argument('--num_colors', type=int, default=None, help='down sample ratio for area')
-    parser.add_argument('--sample_type', type=str, default=None,
+    parser.add_argument('--sample_name', type=str, default=None,
                         choices=['mcut', 'octree', 'kmeans', 'jpeg'])
     parser.add_argument('--dither', action='store_true', default=False)
     parser.add_argument('--jpeg_ratio', type=int, default=None)
@@ -244,7 +240,7 @@ if __name__ == '__main__':
                         help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=60, metavar='N', help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=0.1, metavar='LR', help='learning rate (default: 0.1)')
-    parser.add_argument('--step_size', type=int, default=40)
+    parser.add_argument('--step_size', type=int, default=20, metavar='N', help='step_size for training (default: 10)')
     parser.add_argument('--weight_decay', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum (default: 0.5)')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
