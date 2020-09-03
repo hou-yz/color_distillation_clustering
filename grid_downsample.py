@@ -231,7 +231,7 @@ if __name__ == '__main__':
     parser.add_argument('--jpeg_ratio', type=int, default=None)
     parser.add_argument('--train', action='store_true', default=False)
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
-    parser.add_argument('--epsilon', default=2, type=int)
+    parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())

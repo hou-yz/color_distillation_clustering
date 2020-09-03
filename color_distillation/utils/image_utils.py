@@ -1,7 +1,21 @@
 import numpy as np
 import torch
+from torch import nn
 from PIL import Image
 import matplotlib.pyplot as plt
+
+
+class NormalizeLayer(nn.Module):
+    def __init__(self, mean, std):
+        super(NormalizeLayer, self).__init__()
+        self.mean = torch.FloatTensor(mean).view([1, -1, 1, 1]).cuda()
+        self.std = torch.FloatTensor(std).view([1, -1, 1, 1]).cuda()
+
+    def forward(self, tensor):
+        return (tensor - self.mean) / self.std
+
+    def extra_repr(self):
+        return 'mean={}, std={}'.format(self.mean, self.std)
 
 
 class DeNormalize(object):

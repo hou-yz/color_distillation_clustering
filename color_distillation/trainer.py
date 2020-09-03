@@ -25,7 +25,7 @@ class CNNTrainer(BaseTrainer):
     def __init__(self, classifier, colorcnn=None, label_smooth=0.0, adversarial=None, epsilon=2,
                  mean_var=None, recons_ratio=0.0, kd_ratio=0.0, perceptual_ratio=0.0,
                  colormax_ratio=0.0, colorvar_ratio=0.0,
-                 conf_ratio=0.0, info_ratio=0.0, sample_name=None, sample_trans=None):
+                 conf_ratio=0.0, info_ratio=0.0, sample_name=None, sample_trans=None, colormax_log_ratio=True):
         super(BaseTrainer, self).__init__()
         self.classifier = classifier
         if label_smooth:
@@ -40,8 +40,8 @@ class CNNTrainer(BaseTrainer):
         self.sample_name = sample_name
         if colorcnn is not None:
             self.sample_name = 'colorcnn'
-        self.normalize = Normalize(mean_var[0], mean_var[1])
-        self.denormalize = DeNormalize(mean_var[0], mean_var[1])
+        self.normalize = Normalize(*mean_var)
+        self.denormalize = DeNormalize(*mean_var)
         # self.denormalize = Normalize(-mean_var[0] / mean_var[1], 1 / mean_var[1])
         if adversarial:
             self.fclassifier = fb.PyTorchModel(self.classifier, bounds=(0, 1),
@@ -53,11 +53,12 @@ class CNNTrainer(BaseTrainer):
         elif adversarial == 'bim':
             self.adversarial = fb.attacks.LinfBasicIterativeAttack()
         elif adversarial == 'cw':
-            self.adversarial = fb.attacks.L2CarliniWagnerAttack(steps=100)
+            self.adversarial = fb.attacks.L2CarliniWagnerAttack(steps=10)
         else:
             self.adversarial = None
         self.epsilon = epsilon / 255
         self.sample_trans = sample_trans
+        self.colormax_log_ratio = colormax_log_ratio
 
     def train(self, epoch, data_loader, optimizer, num_colors=None, log_interval=100, cyclic_scheduler=None, ):
         if self.colorcnn:
@@ -110,8 +111,9 @@ class CNNTrainer(BaseTrainer):
                 # entire-image, even distribution among all colors, increase entropy of entire-image color distribution
                 info_loss = (-prob.mean(dim=[2, 3]) * torch.log(prob.mean(dim=[2, 3]) + 1e-16)).mean()
                 recons_loss = self.MSE_loss(data, transformed_img)
+                multiplier = np.log2(num_colors_batch) if self.colormax_log_ratio else 1.0
                 loss += self.recons_ratio * recons_loss * np.log2(num_colors_batch) + \
-                        self.colormax_ratio * -color_appear_loss + \
+                        self.colormax_ratio * -color_appear_loss * multiplier + \
                         self.colorvar_ratio * -color_var_loss + \
                         self.conf_ratio * conf_loss + self.info_ratio * -info_loss
                 if self.perceptual_ratio or self.kd_ratio:
@@ -253,12 +255,12 @@ class CNNTrainer(BaseTrainer):
                     data_quantized = data
 
                 if self.adversarial:
-                    _, data_quantized, _ = self.adversarial(self.fclassifier, data_quantized, target,
-                                                            epsilons=self.epsilon)
+                    data_quantized, _, adv_success = self.adversarial(self.fclassifier, data_quantized, target,
+                                                                      epsilons=self.epsilon)
             # adversarial first
             else:
                 if self.adversarial:
-                    _, data, _ = self.adversarial(self.fclassifier, data, target, epsilons=self.epsilon)
+                    data, _, adv_success = self.adversarial(self.fclassifier, data, target, epsilons=self.epsilon)
                 if self.colorcnn:
                     with torch.no_grad():
                         data_quantized, prob, _ = self.colorcnn(self.normalize(data), num_colors, mode=test_mode)
@@ -276,6 +278,8 @@ class CNNTrainer(BaseTrainer):
             pred = torch.argmax(output, 1)
             correct += pred.eq(target).sum().item()
             miss += target.shape[0] - pred.eq(target).sum().item()
+            # if self.adversarial:
+            #     assert adv_success.int().sum().item() == target.shape[0] - pred.eq(target).sum().item()
             loss = self.CE_loss(output, target)
             losses += loss.item()
             # image file size

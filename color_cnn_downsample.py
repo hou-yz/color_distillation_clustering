@@ -148,7 +148,8 @@ def main(args):
                          recons_ratio=args.recons_ratio,
                          kd_ratio=args.kd_ratio, perceptual_ratio=args.perceptual_ratio,
                          colormax_ratio=args.colormax_ratio, colorvar_ratio=args.colorvar_ratio,
-                         conf_ratio=args.conf_ratio, info_ratio=args.info_ratio)
+                         conf_ratio=args.conf_ratio, info_ratio=args.info_ratio,
+                         colormax_log_ratio=args.colormax_log_ratio)
 
     def test(test_mode='test_cluster'):
         if args.num_colors > 0:
@@ -200,6 +201,7 @@ if __name__ == '__main__':
     parser.add_argument('--kd_ratio', type=float, default=0.0, help='knowledge distillation loss')
     parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
     parser.add_argument('--colormax_ratio', type=float, default=1.0, help='ensure all colors present')
+    parser.add_argument('--colormax_log_ratio', type=bool, default=0, help='use log ratio for colormax loss')
     parser.add_argument('--colorvar_ratio', type=float, default=0.0, help='color palette choose different colors')
     parser.add_argument('--recons_ratio', type=float, default=0.0, help='reconstruction loss')
     parser.add_argument('--conf_ratio', type=float, default=1.0,
@@ -213,7 +215,7 @@ if __name__ == '__main__':
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--temperature', type=float, default=1.0, help='temperature for softmax')
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
-    parser.add_argument('--epsilon', default=2, type=int)
+    parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
