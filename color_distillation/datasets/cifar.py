@@ -4,6 +4,7 @@ import os.path
 import numpy as np
 import pickle
 from typing import Any, Callable, Optional, Tuple
+import torch
 
 from torchvision.datasets.vision import VisionDataset
 from torchvision.datasets.utils import check_integrity, download_and_extract_archive
@@ -54,10 +55,15 @@ class CIFAR10(VisionDataset):
             transform: Optional[Callable] = None,
             target_transform: Optional[Callable] = None,
             download: bool = False,
+            num_colors: bool = 64,
+            color_quantize: Optional[Callable] = None,
     ) -> None:
 
         super(CIFAR10, self).__init__(root, transform=transform,
                                       target_transform=target_transform)
+
+        self.num_colors = num_colors
+        self.color_quantize = color_quantize
 
         self.train = train  # training set or test set
 
@@ -116,13 +122,23 @@ class CIFAR10(VisionDataset):
         # to return a PIL Image
         img = Image.fromarray(img)
 
+        if self.color_quantize is not None:
+            self.color_quantize.num_colors = self.num_colors
+            quantized_img = self.color_quantize(img)
+            H, W, C = np.array(quantized_img).shape
+            palette, index_map = np.unique(np.array(quantized_img).reshape([H * W, C]), axis=0, return_inverse=True)
+            index_map = torch.from_numpy(index_map.reshape([1, H, W]))
+
         if self.transform is not None:
             img = self.transform(img)
 
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return img, target
+        if self.color_quantize is not None:
+            return img, target, index_map
+        else:
+            return img, target
 
     def __len__(self) -> int:
         return len(self.data)
@@ -167,3 +183,12 @@ class CIFAR100(CIFAR10):
         'key': 'fine_label_names',
         'md5': '7973b15100ade9c7d40fb424638fde48',
     }
+
+
+if __name__ == '__main__':
+    import color_distillation.utils.transforms as T
+    from color_distillation.utils.transforms import MedianCut
+
+    dataset = CIFAR10('/home/houyz/Data/cifar10', color_quantize=MedianCut(), transform=T.ToTensor())
+    img, label, index_map = dataset.__getitem__(0)
+    pass

@@ -5,6 +5,8 @@ from PIL import Image
 import os
 import os.path
 from typing import Any, Callable, cast, Dict, List, Optional, Tuple
+import numpy as np
+import torch
 
 
 def has_file_allowed_extension(filename: str, extensions: Tuple[str, ...]) -> bool:
@@ -33,10 +35,10 @@ def is_image_file(filename: str) -> bool:
 
 
 def make_dataset(
-    directory: str,
-    class_to_idx: Dict[str, int],
-    extensions: Optional[Tuple[str, ...]] = None,
-    is_valid_file: Optional[Callable[[str], bool]] = None,
+        directory: str,
+        class_to_idx: Dict[str, int],
+        extensions: Optional[Tuple[str, ...]] = None,
+        is_valid_file: Optional[Callable[[str], bool]] = None,
 ) -> List[Tuple[str, int]]:
     """Generates a list of samples of a form (path_to_sample, class).
 
@@ -120,9 +122,14 @@ class DatasetFolder(VisionDataset):
             transform: Optional[Callable] = None,
             target_transform: Optional[Callable] = None,
             is_valid_file: Optional[Callable[[str], bool]] = None,
+            num_colors: bool = 64,
+            color_quantize: Optional[Callable] = None,
     ) -> None:
         super(DatasetFolder, self).__init__(root, transform=transform,
                                             target_transform=target_transform)
+        self.num_colors = num_colors
+        self.color_quantize = color_quantize
+
         classes, class_to_idx = self._find_classes(self.root)
         samples = self.make_dataset(self.root, class_to_idx, extensions, is_valid_file)
         if len(samples) == 0:
@@ -141,10 +148,10 @@ class DatasetFolder(VisionDataset):
 
     @staticmethod
     def make_dataset(
-        directory: str,
-        class_to_idx: Dict[str, int],
-        extensions: Optional[Tuple[str, ...]] = None,
-        is_valid_file: Optional[Callable[[str], bool]] = None,
+            directory: str,
+            class_to_idx: Dict[str, int],
+            extensions: Optional[Tuple[str, ...]] = None,
+            is_valid_file: Optional[Callable[[str], bool]] = None,
     ) -> List[Tuple[str, int]]:
         return make_dataset(directory, class_to_idx, extensions=extensions, is_valid_file=is_valid_file)
 
@@ -176,12 +183,23 @@ class DatasetFolder(VisionDataset):
         """
         path, target = self.samples[index]
         sample = self.loader(path)
+
+        if self.color_quantize is not None:
+            self.color_quantize.num_colors = self.num_colors
+            quantized_img = self.color_quantize(sample)
+            H, W, C = np.array(quantized_img).shape
+            palette, index_map = np.unique(np.array(quantized_img).reshape([H * W, C]), axis=0, return_inverse=True)
+            index_map = torch.from_numpy(index_map.reshape([1, H, W]))
+
         if self.transform is not None:
             sample = self.transform(sample)
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return sample, target
+        if self.color_quantize is not None:
+            return sample, target, index_map
+        else:
+            return sample, target
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -249,9 +267,21 @@ class ImageFolder(DatasetFolder):
             target_transform: Optional[Callable] = None,
             loader: Callable[[str], Any] = default_loader,
             is_valid_file: Optional[Callable[[str], bool]] = None,
+            num_colors: bool = 64,
+            color_quantize: Optional[Callable] = None,
     ):
         super(ImageFolder, self).__init__(root, loader, IMG_EXTENSIONS if is_valid_file is None else None,
                                           transform=transform,
                                           target_transform=target_transform,
-                                          is_valid_file=is_valid_file)
+                                          is_valid_file=is_valid_file,
+                                          num_colors=num_colors, color_quantize=color_quantize)
         self.imgs = self.samples
+
+
+if __name__ == '__main__':
+    import color_distillation.utils.transforms as T
+    from color_distillation.utils.transforms import MedianCut
+
+    dataset = ImageFolder('/home/houyz/Data/tiny200/train', color_quantize=MedianCut(), transform=T.ToTensor())
+    img, label, index_map = dataset.__getitem__(0)
+    pass
