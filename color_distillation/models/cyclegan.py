@@ -38,9 +38,8 @@ class ResidualBlock(nn.Module):
 
 
 class GeneratorResNet(nn.Module):
-    def __init__(self, num_residual_blocks=3, num_colors=3):
+    def __init__(self, num_residual_blocks=6):
         super(GeneratorResNet, self).__init__()
-        self.num_colors = num_colors
 
         # Initial convolution block
         out_features = 64
@@ -86,8 +85,6 @@ class GeneratorResNet(nn.Module):
 
     def forward(self, x):
         img = self.model(x)
-        if self.num_colors == 1:
-            img = img[:, 0].unsqueeze(1).repeat([1, 3, 1, 1])
         return img
 
 
@@ -123,9 +120,9 @@ class Discriminator(nn.Module):
 
 
 def test():
-    net = GeneratorResNet(num_colors=1)
+    net = GeneratorResNet()
     real_img = torch.zeros([10, 3, 32, 32])
-    gen_img = net(real_img)
+    feat = net(real_img)
     pass
 
 
