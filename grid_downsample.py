@@ -162,7 +162,7 @@ def main(args):
     masked_test_loss_s = []
     masked_test_prec_s = []
 
-    trainer = CNNTrainer(model, mean_var=mean_var, sample_name=args.sample_name)
+    trainer = CNNTrainer(args, model, mean_var=mean_var, sample_name=args.sample_name)
 
     # learn
     if args.train:
@@ -203,7 +203,7 @@ def main(args):
     # with adversarial
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
-        trainer = CNNTrainer(model, adversarial=args.adversarial, epsilon=args.epsilon,
+        trainer = CNNTrainer(args, model, adversarial=args.adversarial, epsilon=args.epsilon,
                              mean_var=mean_var, sample_name=args.sample_name, sample_trans=test_sample_trans)
         print(f'Test on sampled dateset [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
         trainer.test(og_test_loader, args.num_colors, visualize=args.visualize)
