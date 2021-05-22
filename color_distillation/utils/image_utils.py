@@ -36,6 +36,18 @@ class Normalize(object):
         return (tensor - self.mean) / self.std
 
 
+class ReNormalize(nn.Module):
+    def __init__(self, old_mean, old_std, new_mean, new_std):
+        super(ReNormalize, self).__init__()
+        self.denorm = DeNormalize(old_mean, old_std)
+        self.renorm = Normalize(new_mean, new_std)
+
+    def forward(self, batch):
+        batch = self.denorm(batch)
+        batch = self.renorm(batch)
+        return batch
+
+
 def create_coord_map(img_size, with_r=False):
     H, W, C = img_size
     grid_x, grid_y = np.meshgrid(np.arange(W), np.arange(H))
