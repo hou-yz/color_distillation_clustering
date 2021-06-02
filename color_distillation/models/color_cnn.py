@@ -9,7 +9,7 @@ from color_distillation.models.unet import UNet
 
 
 class ColorCNN(nn.Module):
-    def __init__(self, arch, temperature=1.0, bottleneck_channel=16, topk=4):
+    def __init__(self, arch, temperature=1.0, bottleneck_channel=16, topk=4, agg='mean'):
         super().__init__()
         self.topk = topk
         self.temperature = temperature
@@ -25,12 +25,18 @@ class ColorCNN(nn.Module):
                                         nn.BatchNorm2d(bottleneck_channel), nn.ReLU(), )
         # support color quantization into 256 colors at most
         self.color_mask = nn.Conv2d(bottleneck_channel, 256, 1, bias=False)
+        self.agg = agg
 
     def forward(self, img, num_colors, mode='train'):
         B, _, H, W = img.shape
         feat = self.bottleneck(self.base_global(img))
         m = self.color_mask(feat)
-        m = m.view([B, -1, num_colors, H, W]).sum(dim=1)
+        if self.agg == 'mean':
+            m = m.view([B, -1, num_colors, H, W]).mean(dim=1)
+        elif self.agg == 'max':
+            m, _ = m.view([B, -1, num_colors, H, W]).max(dim=1)
+        else:
+            raise Exception
         if mode == 'train':
             topk, idx = torch.topk(m, min(self.topk, num_colors), dim=1)
             m = torch.scatter(torch.zeros_like(m), 1, idx, F.softmax(topk / self.temperature, dim=1))  # softmax output

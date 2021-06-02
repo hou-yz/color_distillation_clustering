@@ -104,13 +104,14 @@ class CNNTrainer(BaseTrainer):
             img = img.cuda()
             if isinstance(target, list):
                 label, quantized_img, index_map = target[0].cuda(), target[1][0].cuda(), target[1][1].cuda()
-                num_colors_batch = index_map.max().item() + 1
+                num_colors_batch = 2 ** int(np.log2(index_map.max().item() + 1) + 0.5)
             else:
                 label = target.cuda()
             optimizer.zero_grad()
             if self.colorcnn:
                 # OG img
-                output_target = self.classifier(self.norm(img))
+                if self.opts.kd_ratio or self.opts.perceptual_ratio:
+                    output_target = self.classifier(self.norm(img))
                 # colorcnn
                 transformed_img, prob, color_palette = self.colorcnn(img, num_colors_batch, mode='train')
                 norm_color_palette = self.norm(color_palette.squeeze(4)).unsqueeze(4) / self.opts.color_norm
@@ -128,10 +129,6 @@ class CNNTrainer(BaseTrainer):
             ce_loss = self.CE_loss(output, label)
             if self.colorcnn:
                 B, _, H, W = img.shape
-                # kd loss
-                kd_loss = self.KD_loss(output, output_target.detach())
-                # perceptual loss
-                perceptual_loss = self.MSE_loss(activation[0], activation[1])
                 # all colors taken
                 color_appear_loss = prob.view([B, -1, H * W]).max(dim=2)[0].mean()
                 # per-pixel, higher confidence, reduce entropy of per-pixel color distribution
@@ -142,15 +139,22 @@ class CNNTrainer(BaseTrainer):
                 # print(f'batch{batch_idx}, num_colors_batch{num_colors_batch}, '
                 #       f'max_index{torch.max(index_map.view(B, -1), dim=1)[0].float().mean().item() + 1}, '
                 #       f'dataset.num_colors{dataloader.dataset.num_colors[0]}')
-                loss = self.opts.ce_ratio * ce_loss + self.opts.kd_ratio * kd_loss + \
-                       self.opts.perceptual_ratio * perceptual_loss + \
+                ce_ratio = torch.sigmoid(torch.tensor(np.log2(num_colors_batch)) - 3) * bool(self.opts.ce_ratio) \
+                    if self.opts.pixsim_ratio else 1
+                loss = self.opts.ce_ratio * ce_loss * ce_ratio + \
                        self.opts.recons_ratio * recons_loss * np.log2(num_colors_batch) + \
                        self.opts.colormax_ratio * -color_appear_loss + \
                        self.opts.conf_ratio * conf_loss + self.opts.info_ratio * -info_loss
+                if self.opts.kd_ratio or self.opts.perceptual_ratio:
+                    # kd loss
+                    kd_loss = self.KD_loss(output, output_target.detach())
+                    # perceptual loss
+                    perceptual_loss = self.MSE_loss(activation[0], activation[1])
+                    loss += self.opts.kd_ratio * kd_loss + self.opts.perceptual_ratio * perceptual_loss
                 if self.opts.pixsim_ratio:
                     M = torch.zeros_like(prob).scatter(1, index_map, 1)
                     pixsim_loss = self.pixel_loss(prob, M)
-                    loss += self.opts.pixsim_ratio * pixsim_loss
+                    loss += self.opts.pixsim_ratio * pixsim_loss * (1 - ce_ratio)
             else:
                 loss = ce_loss
 

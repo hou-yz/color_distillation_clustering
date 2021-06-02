@@ -48,9 +48,9 @@ def main(args):
     data_path = os.path.expanduser('~/Data/') + args.dataset
     if args.dataset == 'cifar10' or args.dataset == 'cifar100':
         num_class = 10 if args.dataset == 'cifar10' else 100
-        pixsim_sample = False
+        pixsim_sample = True
 
-        train_trans = T.Compose([T.RandomCrop(32, padding=4), T.RandomHorizontalFlip(), T.ToTensor(), ])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
 
         if args.dataset == 'cifar10':
@@ -65,7 +65,7 @@ def main(args):
         num_class = 1000
         pixsim_sample = True
 
-        train_trans = T.Compose([T.RandomResizedCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), ])
+        train_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
 
         train_set = datasets.ImageNet(data_path, split='train', transform=train_trans, color_quantize=T.MedianCut())
@@ -76,7 +76,7 @@ def main(args):
         args.batch_size = 32
         pixsim_sample = True
 
-        train_trans = T.Compose([T.RandomCrop(96, padding=12), T.RandomHorizontalFlip(), T.ToTensor(), ])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
 
         train_set = datasets.STL10(data_path, split='train', download=True, transform=train_trans,
@@ -84,9 +84,9 @@ def main(args):
         test_set = datasets.STL10(data_path, split='test', download=True, transform=test_trans)
     elif args.dataset == 'tiny200':
         num_class = 200
-        pixsim_sample = False
+        pixsim_sample = True
 
-        train_trans = T.Compose([T.RandomCrop(64, padding=8), T.RandomHorizontalFlip(), T.ToTensor(), ])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
@@ -106,10 +106,10 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size * 2, shuffle=False,
                                               num_workers=args.num_workers, pin_memory=True)
 
-    logdir = f'ce{args.ce_ratio}_kd{args.kd_ratio}_recons{args.recons_ratio}_' \
-             f'max{args.colormax_ratio}_pixsim{args.pixsim_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' + \
-             f'jit{args.color_jitter}_norm{args.color_norm}_kd{args.kd_ratio}_prcp{args.perceptual_ratio}_' \
-             f'neck{args.bottleneck_channel}_topk{args.topk}_{datetime.datetime.today():%Y-%m-%d_%H-%M-%S}/' \
+    logdir = f'agg{args.agg}_neck{args.bottleneck_channel}_topk{args.topk}_' \
+             f'ce{args.ce_ratio}_kd{args.kd_ratio}_pixsim{args.pixsim_ratio}_recons{args.recons_ratio}_prcp{args.perceptual_ratio}_' \
+             f'max{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_jit{args.color_jitter}_norm{args.color_norm}_' \
+             f'{datetime.datetime.today():%Y-%m-%d_%H-%M-%S}/' \
         if not args.resume else f'resume_{args.resume}'
     logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/{"debug_" if is_debug else ""}{logdir}'
     os.makedirs(f'{logdir}/imgs', exist_ok=True)
@@ -133,7 +133,7 @@ def main(args):
         for param in classifier.parameters():
             param.requires_grad = False
 
-    model = ColorCNN(args.backbone, args.temperature, args.bottleneck_channel, args.topk).cuda()
+    model = ColorCNN(args.backbone, args.temperature, args.bottleneck_channel, args.topk, args.agg).cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.step_size, 1)
@@ -194,8 +194,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
     parser.add_argument('--bottleneck_channel', type=int, default=16)
-    parser.add_argument('--topk', type=int, default=256)
+    parser.add_argument('--topk', type=int, default=4)
     parser.add_argument('--mode', type=str, default='classify', choices=['cluster', 'classify'])
+    parser.add_argument('--agg', type=str, default='mean', choices=['mean', 'max'])
     parser.add_argument('--ce_ratio', type=float, default=1.0, help='cross entropy loss')
     parser.add_argument('--kd_ratio', type=float, default=0.0, help='knowledge distillation loss')
     parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
@@ -223,7 +224,7 @@ if __name__ == '__main__':
     parser.add_argument('--step_size', type=int, default=20, help='step_size for training')
     parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=5e-4)
-    parser.add_argument('--momentum', type=float, default=0.5, help='SGD momentum')
+    parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum')
     parser.add_argument('--log_interval', type=int, default=1000,
                         help='how many batches to wait before logging training status')
     parser.add_argument('--backbone', type=str, default='unet', choices=['unet', 'dncnn', 'cyclegan'])

@@ -280,14 +280,13 @@ class ImageFolder(DatasetFolder):
             target_transform: Optional[Callable] = None,
             loader: Callable[[str], Any] = default_loader,
             is_valid_file: Optional[Callable[[str], bool]] = None,
-            num_colors: bool = 64,
             color_quantize: Optional[Callable] = None,
     ):
         super(ImageFolder, self).__init__(root, loader, IMG_EXTENSIONS if is_valid_file is None else None,
                                           transform=transform,
                                           target_transform=target_transform,
                                           is_valid_file=is_valid_file,
-                                          num_colors=num_colors, color_quantize=color_quantize)
+                                          color_quantize=color_quantize)
         self.imgs = self.samples
 
 
