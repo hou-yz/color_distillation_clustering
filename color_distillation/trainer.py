@@ -15,7 +15,7 @@ from color_distillation.loss import LSR_loss, KD_loss, PixelSimLoss, PixelSample
 from color_distillation.models.alexnet import AlexNet
 from color_distillation.models.vgg import VGG
 from color_distillation.models.resnet import ResNet
-from color_distillation.utils.image_utils import Normalize, DeNormalize
+from color_distillation.utils.image_utils import Normalize
 
 
 class BaseTrainer(object):
@@ -24,10 +24,12 @@ class BaseTrainer(object):
 
 
 class CNNTrainer(BaseTrainer):
-    def __init__(self, opts, classifier, colorcnn=None, logdir=None, pixsim_sample=False,
+    def __init__(self, opts, classifier, colorcnn=None, post_trans=None, logdir=None, pixsim_sample=False,
                  adversarial=None, epsilon=2, sample_name=None, sample_trans=None):
         super(BaseTrainer, self).__init__()
         self.opts = opts
+        self.post_trans = post_trans
+        self.color_jitter = T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5)
         # network
         self.classifier = classifier
         self.colorcnn = colorcnn
@@ -60,7 +62,7 @@ class CNNTrainer(BaseTrainer):
             self.sample_name = 'colorcnn'
         self.sample_trans = sample_trans
 
-    def train(self, epoch, dataloader, optimizer, num_colors=None, log_interval=100, cyclic_scheduler=None, ):
+    def train(self, epoch, dataloader, optimizer, num_colors=None, cyclic_scheduler=None, ):
         if self.colorcnn:
             self.colorcnn.train()
             self.classifier.eval()
@@ -114,13 +116,20 @@ class CNNTrainer(BaseTrainer):
                     output_target = self.classifier(self.norm(img))
                 # colorcnn
                 transformed_img, prob, color_palette = self.colorcnn(img, num_colors_batch, mode='train')
-                norm_color_palette = self.norm(color_palette.squeeze(4)).unsqueeze(4) / self.opts.color_norm
-                norm_color_palette = F.dropout3d(norm_color_palette.transpose(1, 2),
-                                                 p=self.opts.color_dropout).transpose(1, 2)
-                jitter_color_palette = norm_color_palette + self.opts.color_jitter * torch.randn(1).cuda()
-                norm_jit_trans_img = (prob.unsqueeze(1) * jitter_color_palette).sum(dim=2)
-                norm_jit_trans_img += self.opts.gaussian_noise * torch.randn_like(transformed_img)
-                output = self.classifier(norm_jit_trans_img)
+                # post process for augmentation
+                if num_colors_batch <= 2 ** 3:
+                    color_palette = color_palette.clamp(0, 1)
+                    norm_color_palette = self.norm(color_palette.squeeze(4)).unsqueeze(4) / self.opts.color_norm
+                    norm_color_palette = F.dropout3d(norm_color_palette.transpose(1, 2),
+                                                     p=self.opts.color_dropout).transpose(1, 2)
+                    jitter_color_palette = norm_color_palette + self.opts.color_jitter * torch.randn(1).cuda()
+                    norm_jit_img = (prob.unsqueeze(1) * jitter_color_palette).sum(dim=2)
+                    norm_jit_img += self.opts.gaussian_noise * torch.randn_like(transformed_img)
+                else:
+                    transformed_img = transformed_img.clamp(0, 1)
+                    norm_jit_img = self.norm(self.color_jitter(transformed_img))
+                trans_norm_jit_img = self.post_trans(norm_jit_img)
+                output = self.classifier(trans_norm_jit_img)
             else:
                 output = self.classifier(self.norm(img))
             pred = torch.argmax(output, 1)
@@ -139,9 +148,7 @@ class CNNTrainer(BaseTrainer):
                 # print(f'batch{batch_idx}, num_colors_batch{num_colors_batch}, '
                 #       f'max_index{torch.max(index_map.view(B, -1), dim=1)[0].float().mean().item() + 1}, '
                 #       f'dataset.num_colors{dataloader.dataset.num_colors[0]}')
-                ce_ratio = torch.sigmoid(torch.tensor(np.log2(num_colors_batch)) - 3) * bool(self.opts.ce_ratio) \
-                    if self.opts.pixsim_ratio else 1
-                loss = self.opts.ce_ratio * ce_loss * ce_ratio + \
+                loss = self.opts.ce_ratio * ce_loss + \
                        self.opts.recons_ratio * recons_loss * np.log2(num_colors_batch) + \
                        self.opts.colormax_ratio * -color_appear_loss + \
                        self.opts.conf_ratio * conf_loss + self.opts.info_ratio * -info_loss
@@ -154,7 +161,7 @@ class CNNTrainer(BaseTrainer):
                 if self.opts.pixsim_ratio:
                     M = torch.zeros_like(prob).scatter(1, index_map, 1)
                     pixsim_loss = self.pixel_loss(prob, M)
-                    loss += self.opts.pixsim_ratio * pixsim_loss * (1 - ce_ratio)
+                    loss += self.opts.pixsim_ratio * pixsim_loss if num_colors_batch > 2 ** 3 else 0
             else:
                 loss = ce_loss
 
@@ -170,7 +177,7 @@ class CNNTrainer(BaseTrainer):
             if num_colors < 0 and (batch_idx + 1) % 20 == 0:
                 dataloader.dataset.num_colors[0] = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
 
-            if (batch_idx + 1) % log_interval == 0 or (batch_idx + 1) == len(dataloader):
+            if (batch_idx + 1) % self.opts.log_interval == 0 or (batch_idx + 1) == len(dataloader):
                 # print(cyclic_scheduler.last_epoch, optimizer.param_groups[0]['lr'])
                 t1 = time.time()
                 t_epoch = t1 - t0
@@ -281,7 +288,7 @@ class CNNTrainer(BaseTrainer):
                 classifier_layer = classifier_layer[-1]
             weight_softmax = classifier_layer.weight.detach().cpu().numpy()
             if self.colorcnn:
-                colorcnn_handle = self.colorcnn.base_global.register_forward_hook(auto_encoder_activation_hook)
+                colorcnn_handle = self.colorcnn.base.register_forward_hook(auto_encoder_activation_hook)
 
         for batch_idx, (data, target) in enumerate(dataloader):
             data, target = data.cuda(), target.cuda()
@@ -292,6 +299,7 @@ class CNNTrainer(BaseTrainer):
                 if self.colorcnn:
                     with torch.no_grad():
                         data_quantized, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
+                        data_quantized = data_quantized.clamp(0, 1)
                 else:
                     data_quantized = data
 
@@ -305,6 +313,7 @@ class CNNTrainer(BaseTrainer):
                 if self.colorcnn:
                     with torch.no_grad():
                         data_quantized, prob, _ = self.colorcnn(data, num_colors, mode=test_mode)
+                        data_quantized = data_quantized.clamp(0, 1)
                 else:
                     img_list = []
                     for i in range(B):

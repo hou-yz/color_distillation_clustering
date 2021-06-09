@@ -52,6 +52,8 @@ def main(args):
 
         train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
+        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(32, padding=4),
+                                      T.RandomRotation(degrees=15), T.RandomErasing()])
 
         if args.dataset == 'cifar10':
             train_set = datasets.CIFAR10(data_path, train=True, download=True, transform=train_trans,
@@ -67,6 +69,8 @@ def main(args):
 
         train_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
+        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(224, padding=28),
+                                      T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.ImageNet(data_path, split='train', transform=train_trans, color_quantize=T.MedianCut())
         test_set = datasets.ImageNet(data_path, split='val', transform=test_trans)
@@ -78,6 +82,8 @@ def main(args):
 
         train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
+        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(96, padding=12),
+                                      T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.STL10(data_path, split='train', download=True, transform=train_trans,
                                    color_quantize=T.MedianCut())
@@ -88,6 +94,8 @@ def main(args):
 
         train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
+        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(64, padding=8),
+                                      T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
         test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
@@ -106,11 +114,11 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size * 2, shuffle=False,
                                               num_workers=args.num_workers, pin_memory=True)
 
-    logdir = f'agg{args.agg}_neck{args.bottleneck_channel}_topk{args.topk}_' \
+    logdir = f'{args.backbone}_agg{args.agg}_neck{args.bottleneck_channel}_colors{args.colors_channel}_topk{args.topk}_' \
              f'ce{args.ce_ratio}_kd{args.kd_ratio}_pixsim{args.pixsim_ratio}_recons{args.recons_ratio}_prcp{args.perceptual_ratio}_' \
-             f'max{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_jit{args.color_jitter}_norm{args.color_norm}_' \
+             f'max{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_post_jit{args.color_jitter}_norm{args.color_norm}_' \
              f'{datetime.datetime.today():%Y-%m-%d_%H-%M-%S}/' \
-        if not args.resume else f'resume_{args.resume}'
+        if not args.resume else f'resume_{args.resume}'  #
     logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/{"debug_" if is_debug else ""}{logdir}'
     os.makedirs(f'{logdir}/imgs', exist_ok=True)
     copy_tree('./color_distillation', logdir + '/scripts/color_distillation')
@@ -133,7 +141,8 @@ def main(args):
         for param in classifier.parameters():
             param.requires_grad = False
 
-    model = ColorCNN(args.backbone, args.temperature, args.bottleneck_channel, args.topk, args.agg).cuda()
+    model = ColorCNN(args.backbone, args.temperature, args.bottleneck_channel, args.colors_channel,
+                     args.topk, args.agg).cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.step_size, 1)
@@ -146,7 +155,7 @@ def main(args):
     trainer.test(test_loader, visualize=args.visualize)
 
     # then train ColorCNN
-    trainer = CNNTrainer(args, classifier, model, logdir=logdir, pixsim_sample=pixsim_sample)
+    trainer = CNNTrainer(args, classifier, model, train_post_trans, logdir=logdir, pixsim_sample=pixsim_sample)
 
     def test(test_mode, epoch=None):
         if args.num_colors > 0:
@@ -163,7 +172,7 @@ def main(args):
         print('Train ColorCNN...')
         for epoch in tqdm(range(1, args.epochs + 1)):
             print('Training...')
-            trainer.train(epoch, train_loader, optimizer, args.num_colors, args.log_interval, scheduler)
+            trainer.train(epoch, train_loader, optimizer, args.num_colors, scheduler)
             if epoch % 20 == 0:
                 test(test_mode=args.mode, epoch=epoch)
             # save
@@ -173,6 +182,7 @@ def main(args):
         resume_fname = resume_dir + '/ColorCNN.pth'
         model.load_state_dict(torch.load(resume_fname))
     # test
+    print(logdir)
     model.eval()
     print(f'Test in {args.mode} mode...')
     test(test_mode=args.mode, epoch=args.epochs)
@@ -194,6 +204,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
     parser.add_argument('--bottleneck_channel', type=int, default=16)
+    parser.add_argument('--colors_channel', type=int, default=256)
     parser.add_argument('--topk', type=int, default=4)
     parser.add_argument('--mode', type=str, default='classify', choices=['cluster', 'classify'])
     parser.add_argument('--agg', type=str, default='mean', choices=['mean', 'max'])
@@ -220,18 +231,18 @@ if __name__ == '__main__':
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128)
-    parser.add_argument('--epochs', type=int, default=200, help='number of epochs to train')
+    parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train')
     parser.add_argument('--step_size', type=int, default=20, help='step_size for training')
     parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum')
     parser.add_argument('--log_interval', type=int, default=1000,
                         help='how many batches to wait before logging training status')
-    parser.add_argument('--backbone', type=str, default='unet', choices=['unet', 'dncnn', 'cyclegan'])
+    parser.add_argument('--backbone', type=str, default='unet', choices=['unet', 'dncnn', 'cyclegan', 'styleunet'])
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--train_classifier', action='store_true')
     parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
+    parser.add_argument('--seed', type=int, default=None, help='random seed')
     args = parser.parse_args()
 
     main(args)
