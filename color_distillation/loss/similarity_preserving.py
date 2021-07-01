@@ -17,21 +17,8 @@ class BatchSimLoss(nn.Module):
 
 
 class PixelSimLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, sample_ratio=0.1):
         super(PixelSimLoss, self).__init__()
-
-    def forward(self, featmap_src, featmap_tgt):
-        B, C, H, W = featmap_src.shape
-        f_src, f_tgt = featmap_src.view([B, C, H * W]), featmap_tgt.view([B, C, H * W])
-        A_src, A_tgt = torch.bmm(f_src.permute([0, 2, 1]), f_src), torch.bmm(f_tgt.permute([0, 2, 1]), f_tgt)
-        A_src, A_tgt = F.normalize(A_src, p=2, dim=1), F.normalize(A_tgt, p=2, dim=1)
-        loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) ** 2 / (H * W))
-        return loss_semantic
-
-
-class PixelSampleSimLoss(nn.Module):
-    def __init__(self, sample_ratio=0.3):
-        super(PixelSampleSimLoss, self).__init__()
         self.sample_ratio = sample_ratio
 
     def forward(self, featmap_src, featmap_tgt):
@@ -64,13 +51,12 @@ if __name__ == '__main__':
     feat1, feat2 = torch.randn([B, C, H, W]), torch.randn([B, C, H, W])
     batch_loss = BatchSimLoss()
     l1 = batch_loss(feat1, feat2)
-    pixel_loss = PixelSimLoss()
-    l2 = pixel_loss(feat1, feat2)
+    pixel_loss = PixelSampleSimLoss(1)
+    l2_1 = pixel_loss(feat1, feat2)
     pixel_loss = PixelSampleSimLoss()
     l2_2 = pixel_loss(feat1, feat2)
     channel_loss = ChannelSimLoss()
     l3 = channel_loss(feat1, feat2)
-
     feat1, feat2 = torch.randn([B, C]), torch.randn([B, C])
     l3_1 = channel_loss(feat1, feat2)
     pass

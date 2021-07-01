@@ -1,6 +1,6 @@
 import time
 import numpy as np
-from sklearn.cluster import KMeans
+import random
 import color_distillation.utils.transforms as T
 import torch
 import torch.nn as nn
@@ -11,22 +11,20 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
 from io import BytesIO
-from color_distillation.loss import LSR_loss, KD_loss, PixelSimLoss, PixelSampleSimLoss
+from color_distillation.loss import LSR_loss, KD_loss, PixelSimLoss
 from color_distillation.models.alexnet import AlexNet
 from color_distillation.models.vgg import VGG
 from color_distillation.models.resnet import ResNet
 from color_distillation.utils.image_utils import Normalize
 
 
-class BaseTrainer(object):
-    def __init__(self):
-        super(BaseTrainer, self).__init__()
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 
-class CNNTrainer(BaseTrainer):
+class CNNTrainer(object):
     def __init__(self, opts, classifier, colorcnn=None, post_trans=None, logdir=None, pixsim_sample=False,
                  adversarial=None, epsilon=2, sample_name=None, sample_trans=None):
-        super(BaseTrainer, self).__init__()
         self.opts = opts
         self.post_trans = post_trans
         self.color_jitter = T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5)
@@ -37,7 +35,7 @@ class CNNTrainer(BaseTrainer):
         self.CE_loss = LSR_loss(opts.label_smooth) if opts.label_smooth else nn.CrossEntropyLoss()
         self.KD_loss = KD_loss()
         self.MSE_loss = nn.MSELoss()
-        self.pixel_loss = PixelSampleSimLoss() if pixsim_sample else PixelSimLoss()
+        self.pixel_loss = PixelSimLoss(pixsim_sample)
         # logging
         self.logdir = logdir
         self.norm = Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -84,32 +82,17 @@ class CNNTrainer(BaseTrainer):
         t0 = time.time()
 
         # init
-        if num_colors < 0:
-            num_colors_batch = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
-        else:
-            num_colors_batch = num_colors
+        num_colors_batch = 2 if num_colors < 0 else num_colors
         dataloader.dataset.num_colors[0] = num_colors_batch
 
         for batch_idx, (img, target) in enumerate(dataloader):
             activation = []
-            # B, C, H, W = img.shape
-            # quantized_img, index_map = [], []
-            # trans = T.Compose([T.ToPILImage(), T.MedianCut(num_colors_batch), ])
-            # for im in img:
-            #     im = trans(im)
-            #     palette, idx_map = np.unique(np.array(im).reshape([H * W, C]), axis=0, return_inverse=True)
-            #     quantized_img.append(T.ToTensor()(im))
-            #     index_map.append(torch.from_numpy(idx_map.reshape([1, H, W])).long())
-            # quantized_img = torch.stack(quantized_img, dim=0).cuda()
-            # index_map = torch.stack(index_map, dim=0).cuda()
-
             img = img.cuda()
             if isinstance(target, list):
                 label, quantized_img, index_map = target[0].cuda(), target[1][0].cuda(), target[1][1].cuda()
                 num_colors_batch = 2 ** int(np.log2(index_map.max().item() + 1) + 0.5)
             else:
                 label = target.cuda()
-            optimizer.zero_grad()
             if self.colorcnn:
                 # OG img
                 if self.opts.kd_ratio or self.opts.perceptual_ratio:
@@ -122,7 +105,8 @@ class CNNTrainer(BaseTrainer):
                     norm_color_palette = self.norm(color_palette.squeeze(4)).unsqueeze(4) / self.opts.color_norm
                     norm_color_palette = F.dropout3d(norm_color_palette.transpose(1, 2),
                                                      p=self.opts.color_dropout).transpose(1, 2)
-                    jitter_color_palette = norm_color_palette + self.opts.color_jitter * torch.randn(1).cuda()
+                    jitter_color_palette = norm_color_palette + \
+                                           self.opts.color_jitter / np.log2(num_colors_batch) * torch.randn(1).cuda()
                     norm_jit_img = (prob.unsqueeze(1) * jitter_color_palette).sum(dim=2)
                     norm_jit_img += self.opts.gaussian_noise * torch.randn_like(transformed_img)
                 else:
@@ -165,6 +149,7 @@ class CNNTrainer(BaseTrainer):
             else:
                 loss = ce_loss
 
+            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             losses += ce_loss.item()

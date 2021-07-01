@@ -48,7 +48,7 @@ def main(args):
     data_path = os.path.expanduser('~/Data/') + args.dataset
     if args.dataset == 'cifar10' or args.dataset == 'cifar100':
         num_class = 10 if args.dataset == 'cifar10' else 100
-        pixsim_sample = True
+        pixsim_sample = 0.3
 
         train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
@@ -65,7 +65,7 @@ def main(args):
             test_set = datasets.CIFAR100(data_path, train=False, download=True, transform=test_trans)
     elif args.dataset == 'imagenet':
         num_class = 1000
-        pixsim_sample = True
+        pixsim_sample = 0.1
 
         train_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
@@ -78,7 +78,7 @@ def main(args):
         num_class = 10
         # smaller batch size
         args.batch_size = 32
-        pixsim_sample = True
+        pixsim_sample = 0.3
 
         train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
@@ -90,7 +90,7 @@ def main(args):
         test_set = datasets.STL10(data_path, split='test', download=True, transform=test_trans)
     elif args.dataset == 'tiny200':
         num_class = 200
-        pixsim_sample = True
+        pixsim_sample = 0.3
 
         train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
         test_trans = T.Compose([T.ToTensor(), ])
