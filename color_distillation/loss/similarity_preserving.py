@@ -17,19 +17,52 @@ class BatchSimLoss(nn.Module):
 
 
 class PixelSimLoss(nn.Module):
-    def __init__(self, sample_ratio=0.1):
+    def __init__(self, sample_ratio=0.1, normalize=True):
         super(PixelSimLoss, self).__init__()
         self.sample_ratio = sample_ratio
+        self.normalize = normalize
 
-    def forward(self, featmap_src, featmap_tgt):
+    def forward(self, featmap_src, featmap_tgt, visualize=False):
         B, C, H, W = featmap_src.shape
         sample_idx = [np.random.choice(H * W, int(H * W * self.sample_ratio), replace=False) for _ in range(B)]
         sample_idx = np.stack(sample_idx, axis=0).reshape([B, 1, int(H * W * self.sample_ratio)]).repeat(C, axis=1)
         f_src, f_tgt = featmap_src.view([B, C, H * W]).gather(2, torch.from_numpy(sample_idx).to(featmap_src.device)), \
                        featmap_tgt.view([B, C, H * W]).gather(2, torch.from_numpy(sample_idx).to(featmap_tgt.device))
         A_src, A_tgt = torch.bmm(f_src.permute([0, 2, 1]), f_src), torch.bmm(f_tgt.permute([0, 2, 1]), f_tgt)
-        A_src, A_tgt = F.normalize(A_src, p=2, dim=1), F.normalize(A_tgt, p=2, dim=1)
-        loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) ** 2 / (H * W))
+        if self.normalize:
+            A_src, A_tgt = F.normalize(A_src, p=2, dim=1), F.normalize(A_tgt, p=2, dim=1)
+            loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) ** 2 / sample_idx.shape[-1])
+        else:
+            loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) / sample_idx.shape[-1])
+        if visualize:
+            import matplotlib.pyplot as plt
+            # from mpl_toolkits.axes_grid1 import make_axes_locatable
+            # fig, ax = plt.subplots(figsize=(10, 2))
+            # im = ax.imshow(f_src[0].detach().cpu().numpy(), cmap='GnBu', vmin=0, vmax=1)
+            # divider = make_axes_locatable(ax)
+            # cax = divider.new_horizontal(size="5%", pad=1, pack_start=True)
+            # fig.add_axes(cax)
+            # fig.colorbar(im, cax=cax, orientation="vertical")
+            # plt.show()
+
+            fig, ax = plt.subplots(figsize=(10, 2))
+            ax.imshow(f_src[0].detach().cpu().numpy(), cmap='Blues', vmin=0, vmax=1)
+            plt.savefig('f_src.png')
+            plt.show()
+            fig, ax = plt.subplots(figsize=(10, 2))
+            ax.imshow(f_tgt[0].detach().cpu().numpy(), cmap='Blues', vmin=0, vmax=1)
+            plt.savefig('f_tgt.png')
+            plt.show()
+
+            fig, ax = plt.subplots(figsize=(10, 10))
+            ax.imshow(A_src[0].detach().cpu().numpy(), cmap='Blues', vmin=0, vmax=1)
+            plt.savefig('A_src.png')
+            plt.show()
+            fig, ax = plt.subplots(figsize=(10, 10))
+            ax.imshow(A_tgt[0].detach().cpu().numpy(), cmap='Blues', vmin=0, vmax=1)
+            plt.savefig('A_tgt.png')
+            plt.show()
+
         return loss_semantic
 
 
@@ -48,13 +81,13 @@ class ChannelSimLoss(nn.Module):
 
 if __name__ == '__main__':
     B, C, H, W = 32, 128, 10, 10
-    feat1, feat2 = torch.randn([B, C, H, W]), torch.randn([B, C, H, W])
+    feat1, feat2 = torch.ones([B, C, H, W]), torch.zeros([B, C, H, W])
     batch_loss = BatchSimLoss()
     l1 = batch_loss(feat1, feat2)
-    pixel_loss = PixelSampleSimLoss(1)
-    l2_1 = pixel_loss(feat1, feat2)
-    pixel_loss = PixelSampleSimLoss()
-    l2_2 = pixel_loss(feat1, feat2)
+    pixel_loss_1 = PixelSimLoss(1)
+    l2_1 = pixel_loss_1(feat1, feat2)
+    pixel_loss_2 = PixelSimLoss()
+    l2_2 = pixel_loss_2(feat1, feat2)
     channel_loss = ChannelSimLoss()
     l3 = channel_loss(feat1, feat2)
     feat1, feat2 = torch.randn([B, C]), torch.randn([B, C])

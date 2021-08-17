@@ -1,4 +1,4 @@
 from .entropy_loss import HLoss
-from .knowledge_distillation import KD_loss
-from .label_smooth import LSR_loss
+from .knowledge_distillation import KDLoss
+from .label_smooth import LabelSmoothLoss
 from .similarity_preserving import PixelSimLoss, ChannelSimLoss, BatchSimLoss
