@@ -62,7 +62,8 @@ class CIFAR10(VisionDataset):
 
         super(CIFAR10, self).__init__(root, transform=transform,
                                       target_transform=target_transform)
-
+        # shared memory support
+        # https://discuss.pytorch.org/t/dataloader-resets-dataset-state/27960/4
         shared_array_base = mp.Array('i', 1)
         shared_array = np.ctypeslib.as_array(shared_array_base.get_obj())
         self.num_colors = shared_array
@@ -202,6 +203,6 @@ if __name__ == '__main__':
     from color_distillation.utils.transforms import MedianCut
 
     dataset = CIFAR10('/home/houyz/Data/cifar10', color_quantize=MedianCut(),
-                      transform=T.Compose([T.RandomHorizontalFlip(), T.ToTensor() ]))
+                      transform=T.Compose([T.RandomHorizontalFlip(), T.ToTensor()]))
     img, (label, (quantized_img, index_map)) = dataset.__getitem__(0)
     pass
