@@ -10,12 +10,12 @@ custom_factory = {
     'resnet152': ResNet152,
 }
 
-from torchvision.models.alexnet import AlexNet
+from torchvision.models.alexnet import alexnet
 from torchvision.models.vgg import vgg16_bn
 from torchvision.models.resnet import resnet18, resnet50, resnet152
 
 torchvision_factory = {
-    'alexnet': AlexNet,
+    'alexnet': alexnet,
     'vgg16': vgg16_bn,
     'resnet18': resnet18,
     'resnet50': resnet50,
@@ -27,7 +27,7 @@ def names():
     return sorted(custom_factory.keys())
 
 
-def create(name, out_channel, pretrain):
+def create(name, out_channel):
     """
     Create a model instance.
     """
@@ -36,9 +36,14 @@ def create(name, out_channel, pretrain):
         if name not in custom_factory:
             raise KeyError("Unknown model:", name)
         return custom_factory[name](out_channel)
-    elif out_channel == 1000:
+    else:
         if name not in torchvision_factory:
             raise KeyError("Unknown model:", name)
-        return torchvision_factory[name](pretrain)
-    else:
-        raise Exception
+        model = torchvision_factory[name](pretrained=True)
+        if out_channel != 1000:
+            import torch.nn as nn
+            if hasattr(model, 'fc'):
+                model.fc = nn.Linear(model.fc.in_features, out_channel)
+            elif hasattr(model, 'classifier'):
+                model.classifier = nn.Linear(model.classifier.in_features, out_channel)
+        return model
