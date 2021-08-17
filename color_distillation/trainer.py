@@ -1,3 +1,4 @@
+import os
 import time
 import numpy as np
 import random
@@ -5,13 +6,14 @@ import color_distillation.utils.transforms as T
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 from torchvision.utils import save_image, make_grid
 import foolbox as fb
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
 from io import BytesIO
-from color_distillation.loss import LSR_loss, KD_loss, PixelSimLoss
+from color_distillation.loss import LabelSmoothLoss, KDLoss, PixelSimLoss
 from color_distillation.models.alexnet import AlexNet
 from color_distillation.models.vgg import VGG
 from color_distillation.models.resnet import ResNet
@@ -32,8 +34,8 @@ class CNNTrainer(object):
         self.classifier = classifier
         self.colorcnn = colorcnn
         # loss
-        self.CE_loss = LSR_loss(opts.label_smooth) if opts.label_smooth else nn.CrossEntropyLoss()
-        self.KD_loss = KD_loss()
+        self.CE_loss = LabelSmoothLoss(opts.label_smooth) if opts.label_smooth else nn.CrossEntropyLoss()
+        self.KD_loss = KDLoss()
         self.MSE_loss = nn.MSELoss()
         self.pixel_loss = PixelSimLoss(pixsim_sample)
         # logging
@@ -70,11 +72,11 @@ class CNNTrainer(object):
         def cnn_activation_hook(module, input, output):
             activation.append(output)
 
-        if isinstance(self.classifier, AlexNet):
+        if isinstance(self.classifier, AlexNet) or isinstance(self.classifier, torchvision.models.AlexNet):
             handle = self.classifier.features[-2].register_forward_hook(cnn_activation_hook)
-        elif isinstance(self.classifier, VGG):
+        elif isinstance(self.classifier, VGG) or isinstance(self.classifier, torchvision.models.VGG):
             handle = self.classifier.features.register_forward_hook(cnn_activation_hook)
-        elif isinstance(self.classifier, ResNet):
+        elif isinstance(self.classifier, ResNet) or isinstance(self.classifier, torchvision.models.ResNet):
             handle = self.classifier.layer4.register_forward_hook(cnn_activation_hook)
         else:
             raise Exception
@@ -82,8 +84,10 @@ class CNNTrainer(object):
         t0 = time.time()
 
         # init
-        num_colors_batch = 2 if num_colors < 0 else num_colors
-        dataloader.dataset.num_colors[0] = num_colors_batch
+        if self.colorcnn and num_colors:
+            num_colors_batch = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1) \
+                if num_colors < 0 else num_colors
+            dataloader.dataset.num_colors[0] = num_colors_batch
 
         for batch_idx, (img, target) in enumerate(dataloader):
             activation = []
@@ -105,8 +109,8 @@ class CNNTrainer(object):
                     norm_color_palette = self.norm(color_palette.squeeze(4)).unsqueeze(4) / self.opts.color_norm
                     norm_color_palette = F.dropout3d(norm_color_palette.transpose(1, 2),
                                                      p=self.opts.color_dropout).transpose(1, 2)
-                    jitter_color_palette = norm_color_palette + \
-                                           self.opts.color_jitter / np.log2(num_colors_batch) * torch.randn(1).cuda()
+                    jitter_color_palette = norm_color_palette + torch.randn(1).cuda() * \
+                                           self.opts.color_jitter / np.log2(num_colors_batch)
                     norm_jit_img = (prob.unsqueeze(1) * jitter_color_palette).sum(dim=2)
                     norm_jit_img += self.opts.gaussian_noise * torch.randn_like(transformed_img)
                 else:
@@ -159,7 +163,7 @@ class CNNTrainer(object):
                 elif isinstance(cyclic_scheduler, torch.optim.lr_scheduler.OneCycleLR):
                     cyclic_scheduler.step()
 
-            if num_colors < 0 and (batch_idx + 1) % 20 == 0:
+            if self.colorcnn and (num_colors < 0 and (batch_idx + 1) % self.opts.task_update == 0):
                 dataloader.dataset.num_colors[0] = 2 ** np.random.randint(1, int(np.log2(-num_colors)) + 1)
 
             if (batch_idx + 1) % self.opts.log_interval == 0 or (batch_idx + 1) == len(dataloader):
@@ -169,10 +173,10 @@ class CNNTrainer(object):
                 print(f'Train Epoch: {epoch}, Batch:{batch_idx + 1}, \tLoss: {losses / (batch_idx + 1):.3f}, '
                       f'Prec: {100. * correct / (correct + miss):.1f}%, Time: {t_epoch:.3f}')
                 if self.colorcnn:
-                    log = f'recons_loss: {recons_loss.item():.3f}, color_appear_loss: {color_appear_loss.item():.3f}, ' \
-                          f'conf_loss: {conf_loss.item():.3f}, info_loss: {info_loss.item():.3f}'
+                    log = f'ce: {ce_loss.item():.3f}, recons: {recons_loss.item():.3f}, color_appear: ' \
+                          f'{color_appear_loss.item():.3f}, conf: {conf_loss.item():.3f}, info: {info_loss.item():.3f}'
                     if self.opts.pixsim_ratio:
-                        log += f', pixsim_loss: {pixsim_loss.item():.3f}'
+                        log += f', pixsim: {pixsim_loss.item():.3f}'
                     print(log)
 
         handle.remove()
@@ -187,6 +191,7 @@ class CNNTrainer(object):
     def test(self, dataloader, num_colors=None, epoch=None, visualize=False, test_mode='test'):
         activation = {}
         recons_loss_list = []
+        os.makedirs(f'{self.logdir}/imgs', exist_ok=True)
 
         def classifier_activation_hook(module, input, output):
             activation['classifier'] = output.cpu().detach().numpy()
@@ -195,26 +200,26 @@ class CNNTrainer(object):
             activation['auto_encoder'] = output.cpu().detach().numpy()
 
         def visualize_img(i):
-            def save_img_batch(img, fname='batch_imgs.png'):
-                # index = [4, 8, 13, 24, 26, 37, 46, 55]
-                index = [28, 31, 40, 43]
-                image_grid = make_grid(img[index], nrow=8, normalize=True)
-                # Arange images along y-axis
-                save_image(image_grid, fname, normalize=False)
+            # index = [8, 49, 50, 61]
+            # index = [28 + 64, 40 + 64, 59 + 64, 128, 136]
+            index = [28, 31, 40, 43, 5, 6]
+            image_grid = make_grid(data_quantized[index], nrow=8, normalize=False)
+            # Arange images along y-axis
+            save_image(image_grid, f'{self.logdir}/imgs/batch_{num_colors}.png', normalize=False)
 
             if self.colorcnn:
                 og_img = data[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(og_img)
                 plt.show()
-                og_img = Image.fromarray((og_img * 255).astype('uint8')).resize((512, 512))
-                og_img.save('og_img.png')
+                og_img = Image.fromarray((og_img * 255).astype('uint8')).resize((512, 512), Image.NEAREST)
+                og_img.save(f'{self.logdir}/imgs/og_img.png')
 
-                save_img_batch(data_quantized, f'vis/{int(np.log2(num_colors))}bit_colorcnn+.png')
                 downsampled_img = data_quantized[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
-                downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512))
-                downsampled_img.save('colorcnn.png')
+                downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512),
+                                                                                                  Image.NEAREST)
+                downsampled_img.save(f'{self.logdir}/imgs/colorcnn_{num_colors}.png')
 
                 fig = plt.figure(frameon=False)
                 fig.set_size_inches(2, 2)
@@ -222,20 +227,19 @@ class CNNTrainer(object):
                 ax.set_axis_off()
                 fig.add_axes(ax)
                 plt.imshow(np.linalg.norm(activation['auto_encoder'][i], axis=0), cmap='viridis')
-                plt.savefig('auto_encoder.png')
+                plt.savefig(f'{self.logdir}/imgs/encoder_{num_colors}.png')
                 plt.show()
                 # index map
                 plt.imshow(M[i, 0].cpu().numpy(), cmap='Blues')
-                plt.savefig("M.png", bbox_inches='tight')
+                plt.savefig(f'{self.logdir}/imgs/M_{num_colors}.png', bbox_inches='tight')
                 plt.show()
             else:
-                save_img_batch(data_quantized, f'vis/{int(np.log2(num_colors))}bit_{self.sample_name}.png'
-                if isinstance(num_colors, int) else f'vis/og.png')
                 downsampled_img = data_quantized[i].cpu().numpy().squeeze().transpose([1, 2, 0])
                 plt.imshow(downsampled_img)
                 plt.show()
-                downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512))
-                downsampled_img.save(self.sample_name + '.png')
+                downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512),
+                                                                                                  Image.NEAREST)
+                downsampled_img.save(f'{self.logdir}/imgs/{self.sample_name}_{num_colors}.png')
             cam_map = np.sum(activation['classifier'][i] * weight_softmax[pred[i].item()].reshape((-1, 1, 1)), axis=0)
             cam_map = cam_map - np.min(cam_map)
             cam_map = cam_map / np.max(cam_map)
@@ -249,7 +253,7 @@ class CNNTrainer(object):
             #     'Success' if pred.eq(target)[i].item() else 'Failure'),
             #                          (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 2,
             #                          (0, 255, 0) if pred.eq(target)[i].item() else (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.imwrite(self.sample_name + '_cam.png', cam_result)
+            cv2.imwrite(f'{self.logdir}/imgs/{self.sample_name}_cam_{num_colors}.png', cam_result)
             plt.imshow(cv2.cvtColor(cam_result, cv2.COLOR_BGR2RGB))
             plt.show()
             # ax.imshow(cam_map, cmap='viridis', aspect='auto')
@@ -268,7 +272,10 @@ class CNNTrainer(object):
                 classifier_handle = self.classifier.features.register_forward_hook(classifier_activation_hook)
             else:
                 classifier_handle = self.classifier.layer4.register_forward_hook(classifier_activation_hook)
-            classifier_layer = self.classifier.classifier
+            if hasattr(self.classifier, 'classifier'):
+                classifier_layer = self.classifier.classifier
+            else:
+                classifier_layer = self.classifier.fc
             if isinstance(classifier_layer, nn.Sequential):
                 classifier_layer = classifier_layer[-1]
             weight_softmax = classifier_layer.weight.detach().cpu().numpy()
@@ -330,8 +337,11 @@ class CNNTrainer(object):
                     dataset_size += 1
             # plotting
             if visualize:
-                if batch_idx == 1:  # 0,1,4,
-                    visualize_img(0)
+                if batch_idx == 1:
+                    i = 6
+                    visualize_img(i)
+                    print(f'pred: {pred[i]}, target: {target[i]}, '
+                          f'conf: {torch.softmax(output, 1)[i][target[i]] * 100:.1f}%')
                     break
 
         print(f'Test, loss: {losses / (len(dataloader) + 1):.3f}, prec: {100. * correct / (correct + miss):.2f}%, '
@@ -346,29 +356,29 @@ class CNNTrainer(object):
             if self.colorcnn:
                 colorcnn_handle.remove()
 
-        if epoch is not None and self.logdir is not None and self.colorcnn:
-            img, _ = next(iter(dataloader))
+        if epoch is not None and self.logdir is not None:
+            it = iter(dataloader)
+            img, _ = next(it)
+            img, _ = next(it)
             self.sample_image(img.cuda(), num_colors, fname=f'{self.logdir}/imgs/{epoch:03d}_{num_colors}.png')
 
         return losses / len(dataloader), correct / (correct + miss)
 
-    def sample_image(self, img, num_colors, fname, quantized_img=None, use_generator=True, nrow=4):
-        if use_generator:
+    def sample_image(self, img, num_colors, fname, quantized_img=None, nrow=4):
+        if self.colorcnn:
             """Saves a generated sample from the test set"""
             self.colorcnn.eval()
             with torch.no_grad():
                 img_trans, _, _ = self.colorcnn(img, num_colors, mode='test')
-            # Arange images along x-axis
             OG = make_grid(img, nrow=nrow)
             colorcnn = make_grid(img_trans, nrow=nrow)
-            # Arange images along y-axis
             if quantized_img is not None:
                 mediancut = make_grid(quantized_img, nrow=nrow)
                 res = [OG, colorcnn, mediancut]
             else:
                 res = [OG, colorcnn]
+            # Arange images along x-axis
             image_grid = torch.cat(res, 2)
         else:
             image_grid = make_grid(img, nrow=nrow)
-            pass
         save_image(image_grid, fname, normalize=False)
