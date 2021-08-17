@@ -12,10 +12,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader
 import color_distillation.utils.transforms as T
 from color_distillation import models, datasets
 from color_distillation.models.color_cnn import ColorCNN
 from color_distillation.trainer import CNNTrainer
+from color_distillation.utils.sampler import RandomSeqSampler
 from color_distillation.utils.load_checkpoint import checkpoint_loader
 from color_distillation.utils.draw_curve import draw_curve
 from color_distillation.utils.logger import Logger
@@ -67,13 +69,25 @@ def main(args):
         num_class = 1000
         pixsim_sample = 0.1
 
-        train_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), ])
-        test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
+        train_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.RandomHorizontalFlip(), ])
+        test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), ])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(224, padding=28),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.ImageNet(data_path, split='train', transform=train_trans, color_quantize=T.MedianCut())
         test_set = datasets.ImageNet(data_path, split='val', transform=test_trans)
+    elif args.dataset == 'style14mini':
+        num_class = 14
+        args.batch_size = 32
+        pixsim_sample = 0.3
+
+        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(), ])
+        test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), ])
+        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(112, padding=14),
+                                      T.RandomRotation(degrees=15), T.RandomErasing()])
+
+        train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
+        test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
     elif args.dataset == 'stl10':
         num_class = 10
         # smaller batch size
@@ -108,18 +122,19 @@ def main(args):
             args.color_norm = 1
 
     kwargs = {'prefetch_factor': 1} if args.num_workers else {}
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=True,
-                                               num_workers=args.num_workers, pin_memory=True,
-                                               **kwargs)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size * 2, shuffle=False,
-                                              num_workers=args.num_workers, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True,
+                              num_workers=args.num_workers, pin_memory=True, **kwargs)
+    test_loader = DataLoader(test_set, batch_size=args.batch_size * 2,
+                             # sampler=RandomSeqSampler(test_set),
+                             num_workers=args.num_workers, pin_memory=True)
 
-    logdir = f'{args.backbone}_agg{args.agg}_neck{args.bottleneck_channel}_colors{args.colors_channel}_topk{args.topk}_' \
-             f'ce{args.ce_ratio}_kd{args.kd_ratio}_pixsim{args.pixsim_ratio}_recons{args.recons_ratio}_prcp{args.perceptual_ratio}_' \
-             f'max{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_post_jit{args.color_jitter}_norm{args.color_norm}_' \
-             f'{datetime.datetime.today():%Y-%m-%d_%H-%M-%S}/' \
+    logdir = f'{"debug_" if is_debug else ""}' \
+             f'{args.backbone}_agg{args.agg}_neck{args.bottleneck_channel}_colors{args.colors_channel}_topk{args.topk}_' \
+             f'ce{args.ce_ratio}_kd{args.kd_ratio}_pixsim{args.pixsim_ratio}_sample{pixsim_sample}_recons{args.recons_ratio}_' \
+             f'prcp{args.perceptual_ratio}_max{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' \
+             f'jit{args.color_jitter}_norm{args.color_norm}_{datetime.datetime.today():%Y-%m-%d_%H-%M-%S}/' \
         if not args.resume else f'resume_{args.resume}'  #
-    logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/{"debug_" if is_debug else ""}{logdir}'
+    logdir = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/{logdir}'
     os.makedirs(f'{logdir}/imgs', exist_ok=True)
     copy_tree('./color_distillation', logdir + '/scripts/color_distillation')
     for script in os.listdir('.'):
@@ -132,14 +147,13 @@ def main(args):
     print(logdir)
 
     # model
-    classifier = models.create(args.arch, num_class, not args.train_classifier).cuda()
-    if not args.train_classifier:
-        if args.dataset != 'imagenet':
-            resume_fname = 'logs/grid/{}/{}/full_colors'.format(args.dataset, args.arch) + '/model.pth'
-            classifier.load_state_dict(torch.load(resume_fname))
-        classifier.eval()
-        for param in classifier.parameters():
-            param.requires_grad = False
+    classifier = models.create(args.arch, num_class).cuda()
+    if args.dataset != 'imagenet':
+        resume_fname = 'logs/grid/{}/{}/full_colors'.format(args.dataset, args.arch) + '/model.pth'
+        classifier.load_state_dict(torch.load(resume_fname))
+    classifier.eval()
+    for param in classifier.parameters():
+        param.requires_grad = False
 
     model = ColorCNN(args.backbone, args.temperature, args.bottleneck_channel, args.colors_channel,
                      args.topk, args.agg).cuda()
@@ -151,7 +165,7 @@ def main(args):
 
     # first test the pre-trained classifier
     print('Test the pre-trained classifier...')
-    trainer = CNNTrainer(args, classifier, sample_name='og_img')
+    trainer = CNNTrainer(args, classifier, logdir=logdir, sample_name='og_img')
     trainer.test(test_loader, visualize=args.visualize)
 
     # then train ColorCNN
@@ -178,8 +192,7 @@ def main(args):
             # save
             torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
     else:
-        resume_dir = 'logs/colorcnn/{}/{}/{}colors/'.format(args.dataset, args.arch, args.num_colors) + args.resume
-        resume_fname = resume_dir + '/ColorCNN.pth'
+        resume_fname = f'logs/colorcnn/{args.dataset}/{args.arch}/{args.num_colors}colors/{args.resume}/ColorCNN.pth'
         model.load_state_dict(torch.load(resume_fname))
     # test
     print(logdir)
@@ -212,7 +225,7 @@ if __name__ == '__main__':
     parser.add_argument('--kd_ratio', type=float, default=0.0, help='knowledge distillation loss')
     parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
     parser.add_argument('--colormax_ratio', type=float, default=1.0, help='ensure all colors present')
-    parser.add_argument('--pixsim_ratio', type=float, default=0.0, help='similarity towards the KMeans result')
+    parser.add_argument('--pixsim_ratio', type=float, default=3.0, help='similarity towards the KMeans result')
     parser.add_argument('--recons_ratio', type=float, default=0.0, help='reconstruction loss')
     parser.add_argument('--conf_ratio', type=float, default=1.0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
@@ -227,12 +240,13 @@ if __name__ == '__main__':
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'svhn', 'imagenet', 'tiny200'])
+                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train')
     parser.add_argument('--step_size', type=int, default=20, help='step_size for training')
+    parser.add_argument('--task_update', type=int, default=20, help='task_update (num of batches) for training')
     parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum')
@@ -240,7 +254,6 @@ if __name__ == '__main__':
                         help='how many batches to wait before logging training status')
     parser.add_argument('--backbone', type=str, default='unet', choices=['unet', 'dncnn', 'cyclegan', 'styleunet'])
     parser.add_argument('--resume', type=str, default=None)
-    parser.add_argument('--train_classifier', action='store_true')
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--seed', type=int, default=None, help='random seed')
     args = parser.parse_args()
