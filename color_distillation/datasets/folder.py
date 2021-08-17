@@ -2,12 +2,13 @@ from torchvision.datasets.vision import VisionDataset
 
 from PIL import Image
 
+import time
 import random
 import os
 import os.path
 from typing import Any, Callable, cast, Dict, List, Optional, Tuple
 import numpy as np
-import torch
+import torchvision.transforms as T
 import torch.multiprocessing as mp
 
 
@@ -149,6 +150,7 @@ class DatasetFolder(VisionDataset):
         self.class_to_idx = class_to_idx
         self.samples = samples
         self.targets = [s[1] for s in samples]
+        self.to_tensor = T.ToTensor()
 
     @staticmethod
     def make_dataset(
@@ -188,24 +190,18 @@ class DatasetFolder(VisionDataset):
         path, target = self.samples[index]
         sample = self.loader(path)
 
-        seed = np.random.randint(2147483647)  # make a seed with numpy generator
+        if self.transform is not None:
+            sample = self.transform(sample)
+
         if self.color_quantize is not None:
             self.color_quantize.num_colors = self.num_colors[0]
             quantized_img = self.color_quantize(sample)
             H, W, C = np.array(quantized_img).shape
             palette, index_map = np.unique(np.array(quantized_img).reshape([H * W, C]), axis=0, return_inverse=True)
             index_map = Image.fromarray(index_map.reshape(H, W).astype(np.uint8))
-            random.seed(seed)  # apply this seed to img tranfsorms
-            torch.manual_seed(seed)  # needed for torchvision 0.7
-            index_map = (self.transform(index_map) * 255).round().long()
-            random.seed(seed)  # apply this seed to img tranfsorms
-            torch.manual_seed(seed)  # needed for torchvision 0.7
-            quantized_img = self.transform(quantized_img)
+            quantized_img, index_map = self.to_tensor(quantized_img), (self.to_tensor(index_map) * 255).round().long()
+        sample = self.to_tensor(sample)
 
-        if self.transform is not None:
-            random.seed(seed)  # apply this seed to img tranfsorms
-            torch.manual_seed(seed)  # needed for torchvision 0.7
-            sample = self.transform(sample)
         if self.target_transform is not None:
             target = self.target_transform(target)
 
