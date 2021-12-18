@@ -4,6 +4,7 @@ os.environ['OMP_NUM_THREADS'] = '1'
 import argparse
 import sys
 from tqdm import tqdm
+import random
 import numpy as np
 import torch
 import torch.nn as nn
@@ -25,6 +26,10 @@ def main(args):
     if args.seed is not None:
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
+        torch.cuda.manual_seed(args.seed)
+        random.seed(args.seed)
+    
+    if args.deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
     else:
@@ -244,7 +249,8 @@ if __name__ == '__main__':
     parser.add_argument('--log_interval', type=int, default=100,
                         help='how many batches to wait before logging training status')
     parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
+    parser.add_argument('--deterministic', action='store_true')
+    parser.add_argument('--seed', type=int, default=0, help='random seed (default: None)')
     args = parser.parse_args()
 
     main(args)

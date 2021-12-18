@@ -40,9 +40,10 @@ def main(args):
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed(args.seed)
         random.seed(args.seed)
+    
+    if args.deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        # torch.backends.cudnn.benchmark = True
     else:
         torch.backends.cudnn.benchmark = True
 
@@ -52,8 +53,8 @@ def main(args):
         num_class = 10 if args.dataset == 'cifar10' else 100
         pixsim_sample = 0.3
 
-        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
-        test_trans = T.Compose([T.ToTensor(), ])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), ])
+        test_trans = T.Compose([])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(32, padding=4),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
@@ -94,8 +95,8 @@ def main(args):
         args.batch_size = 32
         pixsim_sample = 0.3
 
-        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
-        test_trans = T.Compose([T.ToTensor(), ])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), ])
+        test_trans = T.Compose([])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(96, padding=12),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
@@ -106,8 +107,8 @@ def main(args):
         num_class = 200
         pixsim_sample = 0.3
 
-        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ToTensor(), ])
-        test_trans = T.Compose([T.ToTensor(), ])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), ])
+        test_trans = T.Compose([])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(64, padding=8),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
@@ -255,7 +256,8 @@ if __name__ == '__main__':
     parser.add_argument('--backbone', type=str, default='unet', choices=['unet', 'dncnn', 'cyclegan', 'styleunet'])
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--visualize', action='store_true')
-    parser.add_argument('--seed', type=int, default=None, help='random seed')
+    parser.add_argument('--deterministic', action='store_true')
+    parser.add_argument('--seed', type=int, default=0, help='random seed')
     args = parser.parse_args()
 
     main(args)

@@ -5,7 +5,7 @@ import os.path
 import numpy as np
 import pickle
 from typing import Any, Callable, Optional, Tuple
-import torch
+import torchvision.transforms as T
 import torch.multiprocessing as mp
 
 from torchvision.datasets.vision import VisionDataset
@@ -64,10 +64,13 @@ class CIFAR10(VisionDataset):
                                       target_transform=target_transform)
         # shared memory support
         # https://discuss.pytorch.org/t/dataloader-resets-dataset-state/27960/4
+        # https://discuss.pytorch.org/t/how-to-share-data-among-dataloader-processes-to-save-memory/108772
         shared_array_base = mp.Array('i', 1)
         shared_array = np.ctypeslib.as_array(shared_array_base.get_obj())
+        shared_array[0] = 16
         self.num_colors = shared_array
         self.color_quantize = color_quantize
+        self.to_tensor = T.ToTensor()
 
         self.train = train  # training set or test set
 
@@ -126,24 +129,18 @@ class CIFAR10(VisionDataset):
         # to return a PIL Image
         img = Image.fromarray(img)
 
-        seed = np.random.randint(2147483647)  # make a seed with numpy generator
+        if self.transform is not None:
+            img = self.transform(img)
+
         if self.color_quantize is not None:
             self.color_quantize.num_colors = self.num_colors[0]
             quantized_img = self.color_quantize(img)
             H, W, C = np.array(quantized_img).shape
             palette, index_map = np.unique(np.array(quantized_img).reshape([H * W, C]), axis=0, return_inverse=True)
             index_map = Image.fromarray(index_map.reshape(H, W).astype(np.uint8))
-            random.seed(seed)  # apply this seed to img tranfsorms
-            torch.manual_seed(seed)  # needed for torchvision 0.7
-            index_map = (self.transform(index_map) * 255).round().long()
-            random.seed(seed)  # apply this seed to img tranfsorms
-            torch.manual_seed(seed)  # needed for torchvision 0.7
-            quantized_img = self.transform(quantized_img)
-
-        if self.transform is not None:
-            random.seed(seed)  # apply this seed to img tranfsorms
-            torch.manual_seed(seed)  # needed for torchvision 0.7
-            img = self.transform(img)
+            quantized_img, index_map = self.to_tensor(quantized_img), (self.to_tensor(index_map) * 255).round().long()
+        if isinstance(img, Image.Image):
+            img = self.to_tensor(img)
 
         if self.target_transform is not None:
             target = self.target_transform(target)
@@ -203,6 +200,6 @@ if __name__ == '__main__':
     from color_distillation.utils.transforms import MedianCut
 
     dataset = CIFAR10('/home/houyz/Data/cifar10', color_quantize=MedianCut(),
-                      transform=T.Compose([T.RandomHorizontalFlip(), T.ToTensor()]))
+                      transform=T.Compose([T.RandomHorizontalFlip()]))
     img, (label, (quantized_img, index_map)) = dataset.__getitem__(0)
     pass

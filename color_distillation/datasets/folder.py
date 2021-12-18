@@ -129,11 +129,15 @@ class DatasetFolder(VisionDataset):
     ) -> None:
         super(DatasetFolder, self).__init__(root, transform=transform,
                                             target_transform=target_transform)
-
+        # shared memory support
+        # https://discuss.pytorch.org/t/dataloader-resets-dataset-state/27960/4
+        # https://discuss.pytorch.org/t/how-to-share-data-among-dataloader-processes-to-save-memory/108772
         shared_array_base = mp.Array('i', 1)
         shared_array = np.ctypeslib.as_array(shared_array_base.get_obj())
+        shared_array[0] = 16
         self.num_colors = shared_array
         self.color_quantize = color_quantize
+        self.to_tensor = T.ToTensor()
 
         classes, class_to_idx = self._find_classes(self.root)
         samples = self.make_dataset(self.root, class_to_idx, extensions, is_valid_file)
@@ -150,7 +154,6 @@ class DatasetFolder(VisionDataset):
         self.class_to_idx = class_to_idx
         self.samples = samples
         self.targets = [s[1] for s in samples]
-        self.to_tensor = T.ToTensor()
 
     @staticmethod
     def make_dataset(
@@ -200,7 +203,8 @@ class DatasetFolder(VisionDataset):
             palette, index_map = np.unique(np.array(quantized_img).reshape([H * W, C]), axis=0, return_inverse=True)
             index_map = Image.fromarray(index_map.reshape(H, W).astype(np.uint8))
             quantized_img, index_map = self.to_tensor(quantized_img), (self.to_tensor(index_map) * 255).round().long()
-        sample = self.to_tensor(sample)
+        if isinstance(sample, Image.Image):
+            sample = self.to_tensor(sample)
 
         if self.target_transform is not None:
             target = self.target_transform(target)
@@ -291,6 +295,6 @@ if __name__ == '__main__':
     from color_distillation.utils.transforms import MedianCut
 
     dataset = ImageFolder('/home/houyz/Data/tiny200/train', color_quantize=MedianCut(),
-                          transform=T.Compose([T.RandomHorizontalFlip(), T.ToTensor()]))
-    img, (label, (quantized_img, index_map)) = dataset.__getitem__(0)
+                          transform=T.Compose([T.RandomHorizontalFlip()]))
+    img, target = dataset.__getitem__(0)
     pass
