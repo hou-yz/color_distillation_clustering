@@ -60,7 +60,8 @@ class CNNTrainer(object):
         self.sample_name = sample_name
         if colorcnn is not None:
             self.sample_name = 'colorcnn'
-        self.sample_trans = sample_trans
+        self.sample_trans = T.Compose([T.ToPILImage()] + sample_trans + [T.ToTensor()]) \
+            if isinstance(sample_trans, list) else sample_trans
 
     def train(self, epoch, dataloader, optimizer, num_colors=None, cyclic_scheduler=None, ):
         if self.colorcnn:

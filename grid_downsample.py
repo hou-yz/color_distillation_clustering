@@ -28,7 +28,7 @@ def main(args):
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed(args.seed)
         random.seed(args.seed)
-    
+
     if args.deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -38,29 +38,23 @@ def main(args):
     buffer_size_counter = BufferSizeCounter()
     if args.sample_name == 'mcut':
         sample_trans = [T.MedianCut(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
-        test_sample_trans = T.MedianCut(args.num_colors, args.dither)
         if args.dither: args.sample_name += '_dither'
     elif args.sample_name == 'octree':
         sample_trans = [T.OCTree(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
-        test_sample_trans = T.OCTree(args.num_colors, args.dither)
         if args.dither: args.sample_name += '_dither'
     elif args.sample_name == 'kmeans':
         sample_trans = [T.KMeans(args.num_colors, args.dither), T.PNGCompression(buffer_size_counter)]
-        test_sample_trans = T.KMeans(args.num_colors, args.dither)
         if args.dither: args.sample_name += '_dither'
     elif args.sample_name == 'jpeg':
         sample_trans = [T.JpegCompression(buffer_size_counter, args.jpeg_ratio)]
-        test_sample_trans = T.JpegCompression(buffer_size_counter, args.jpeg_ratio)
     elif args.sample_name is None:
-        sample_trans = []
-        test_sample_trans = T.PNGCompression(buffer_size_counter)
+        sample_trans = [T.PNGCompression(buffer_size_counter)]
         args.sample_name = 'og_img'
     else:
         raise Exception
 
     # dataset
     data_path = os.path.expanduser('~/Data/') + args.dataset
-    test_sample_trans = T.Compose([T.ToPILImage(), test_sample_trans, T.ToTensor()])
     base_lr_ratio = 1
     if args.dataset == 'cifar10' or args.dataset == 'cifar100':
         num_class = 10 if args.dataset == 'cifar10' else 100
@@ -199,18 +193,18 @@ def main(args):
     img, tgt = next(iter(og_test_loader))
     B, C, H, W = img.shape
     trainer.test(sampled_test_loader, args.num_colors, args.epochs, visualize=args.visualize)
-    print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
-          f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+    print(f'Average image size: {buffer_size_counter.size[0] / len(sampled_test_set):.1f}; '
+          f'Bit per pixel: {buffer_size_counter.size[0] / len(sampled_test_set) / H / W:.3f}')
     buffer_size_counter.reset()
     # with adversarial
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
         trainer = CNNTrainer(args, model, adversarial=args.adversarial, epsilon=args.epsilon,
-                             sample_name=args.sample_name, sample_trans=test_sample_trans)
+                             sample_name=args.sample_name, sample_trans=sample_trans)
         print(f'Test on sampled dateset [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
         trainer.test(og_test_loader, args.num_colors, visualize=args.visualize)
-        print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
-              f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
+        print(f'Average image size: {buffer_size_counter.size[0] / len(sampled_test_set):.1f}; '
+              f'Bit per pixel: {buffer_size_counter.size[0] / len(sampled_test_set) / H / W:.3f}')
         buffer_size_counter.reset()
 
         # print('********************    [quantization first]    ********************')
@@ -230,7 +224,7 @@ if __name__ == '__main__':
     parser.add_argument('--sample_name', type=str, default=None,
                         choices=['mcut', 'octree', 'kmeans', 'jpeg'])
     parser.add_argument('--dither', action='store_true', default=False)
-    parser.add_argument('--jpeg_ratio', type=int, default=None)
+    parser.add_argument('--jpeg_ratio', type=int, default=50)
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--train', action='store_true', default=False)
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])

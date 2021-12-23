@@ -61,7 +61,7 @@ class PNGCompression(object):
 
 
 class JpegCompression(object):
-    def __init__(self, buffer_size_counter, quality=5):
+    def __init__(self, buffer_size_counter, quality=50):
         self.buffer_size_counter = buffer_size_counter
         self.quality = quality
 
