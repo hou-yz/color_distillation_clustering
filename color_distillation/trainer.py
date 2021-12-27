@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
 from io import BytesIO
+from sklearn.metrics import average_precision_score
 from color_distillation.loss import LabelSmoothLoss, KDLoss, PixelSimLoss
 from color_distillation.models.alexnet import AlexNet
 from color_distillation.models.vgg import VGG
@@ -35,6 +36,7 @@ class CNNTrainer(object):
         self.colorcnn = colorcnn
         # loss
         self.CE_loss = LabelSmoothLoss(opts.label_smooth) if opts.label_smooth else nn.CrossEntropyLoss()
+        self.BCE_loss = nn.BCEWithLogitsLoss()
         self.KD_loss = KDLoss()
         self.MSE_loss = nn.MSELoss()
         self.pixel_loss = PixelSimLoss(pixsim_sample)
@@ -81,7 +83,7 @@ class CNNTrainer(object):
             handle = self.classifier.layer4.register_forward_hook(cnn_activation_hook)
         else:
             raise Exception
-        losses, correct, miss = 0, 0, 0
+        losses, correct, miss = 0, 0, 1e-8
         t0 = time.time()
 
         # init
@@ -121,10 +123,13 @@ class CNNTrainer(object):
                 output = self.classifier(trans_norm_jit_img)
             else:
                 output = self.classifier(self.norm(img))
-            pred = torch.argmax(output, 1)
-            correct += pred.eq(label).sum().item()
-            miss += label.shape[0] - pred.eq(label).sum().item()
-            ce_loss = self.CE_loss(output, label)
+            if self.opts.dataset == 'voc':
+                ce_loss = self.BCE_loss(output, label)
+            else:
+                pred = torch.argmax(output, 1)
+                correct += pred.eq(label).sum().item()
+                miss += label.shape[0] - pred.eq(label).sum().item()
+                ce_loss = self.CE_loss(output, label)
             if self.colorcnn:
                 B, _, H, W = img.shape
                 # all colors taken
@@ -265,7 +270,8 @@ class CNNTrainer(object):
         self.classifier.eval()
         if self.colorcnn:
             self.colorcnn.eval()
-        losses, correct, miss = 0, 0, 0
+        losses, correct, miss = 0, 0, 1e-8
+        scores, labels = [], []
         t0 = time.time()
 
         if visualize:
@@ -285,7 +291,6 @@ class CNNTrainer(object):
 
         for batch_idx, (data, target) in enumerate(dataloader):
             data, target = data.cuda(), target.cuda()
-            data_og = data.clone()
             B, C, H, W = data.shape
             # quantization first
             if self.sample_trans is None:
@@ -317,12 +322,17 @@ class CNNTrainer(object):
 
             with torch.no_grad():
                 output = self.classifier(self.norm(data_quantized))
-            pred = torch.argmax(output, 1)
-            correct += pred.eq(target).sum().item()
-            miss += target.shape[0] - pred.eq(target).sum().item()
-            # if self.adversarial:
-            #     assert adv_success.int().sum().item() == target.shape[0] - pred.eq(target).sum().item()
-            loss = self.CE_loss(output, target)
+            if self.opts.dataset == 'voc':
+                scores.append(torch.sigmoid(output).cpu())
+                labels.append(target.cpu())
+                loss = self.BCE_loss(output, target)
+            else:
+                pred = torch.argmax(output, 1)
+                correct += pred.eq(target).sum().item()
+                miss += target.shape[0] - pred.eq(target).sum().item()
+                # if self.adversarial:
+                #     assert adv_success.int().sum().item() == target.shape[0] - pred.eq(target).sum().item()
+                loss = self.CE_loss(output, target)
             losses += loss.item()
             # image file size
             if self.colorcnn:
@@ -345,8 +355,14 @@ class CNNTrainer(object):
                           f'conf: {torch.softmax(output, 1)[i][target[i]] * 100:.1f}%')
                     break
 
-        print(f'Test, loss: {losses / (len(dataloader) + 1):.3f}, prec: {100. * correct / (correct + miss):.2f}%, '
-              f'time: {time.time() - t0:.1f}, recons loss: {np.mean(recons_loss_list):.3f}')
+        if self.opts.dataset == 'voc':
+            scores = torch.cat(scores, dim=0)
+            labels = torch.cat(labels, dim=0)
+            mAP = average_precision_score(labels[1:], scores[1:])
+            print(f'Test, loss: {losses / len(dataloader):.3f}, mean average prec: {100. * mAP:.2f}%, ')
+        else:
+            print(f'Test, loss: {losses / len(dataloader):.3f}, prec: {100. * correct / (correct + miss):.2f}%, ')
+        print(f'time: {time.time() - t0:.1f}, recons loss: {np.mean(recons_loss_list):.3f}')
         if self.colorcnn:
             print(f'Average number of colors per image: {number_of_colors / dataset_size}; \n'
                   f'Average image size: {buffer_size_counter / dataset_size:.1f}; '
@@ -363,7 +379,7 @@ class CNNTrainer(object):
             img, _ = next(it)
             self.sample_image(img.cuda(), num_colors, fname=f'{self.logdir}/imgs/{epoch:03d}_{num_colors}.png')
 
-        return losses / len(dataloader), correct / (correct + miss)
+        return losses / len(dataloader), mAP if self.opts.dataset == 'voc' else correct / (correct + miss)
 
     def sample_image(self, img, num_colors, fname, quantized_img=None, nrow=4):
         if self.colorcnn:

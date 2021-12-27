@@ -10,12 +10,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import datasets
+from color_distillation import datasets
 import color_distillation.utils.transforms as T
 from color_distillation import models
 from color_distillation.trainer import CNNTrainer
 from color_distillation.utils.sampler import RandomSeqSampler
-from color_distillation.utils.load_checkpoint import checkpoint_loader
 from color_distillation.utils.draw_curve import draw_curve
 from color_distillation.utils.logger import Logger
 from color_distillation.utils.buffer_size_counter import BufferSizeCounter
@@ -117,6 +116,16 @@ def main(args):
         og_train_set = datasets.ImageFolder(data_path + '/train', transform=og_train_trans, )
         og_test_set = datasets.ImageFolder(data_path + '/val', transform=og_test_trans)
         sampled_test_set = datasets.ImageFolder(data_path + '/val', transform=sampled_test_trans, )
+    elif args.dataset == 'voc':
+        num_class = 20
+        data_path = os.path.expanduser('~/Data/pascal_VOC')
+        og_train_trans = T.Compose([T.RandomResizedCrop(112), T.RandomHorizontalFlip(), T.ToTensor(), ])
+        og_test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
+        sampled_test_trans = T.Compose(sample_trans + [T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
+
+        og_train_set = datasets.VOC(data_path, image_set='train', transform=og_train_trans, )
+        og_test_set = datasets.VOC(data_path, image_set='val', transform=og_test_trans)
+        sampled_test_set = datasets.VOC(data_path, image_set='val', transform=sampled_test_trans, )
     else:
         raise Exception
 
@@ -147,7 +156,6 @@ def main(args):
     optimizer = optim.SGD(param_dicts, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
                                                     steps_per_epoch=len(og_train_loader), epochs=args.epochs)
-    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size)
 
     # draw curve
     x_epoch = []
@@ -155,31 +163,24 @@ def main(args):
     train_prec_s = []
     og_test_loss_s = []
     og_test_prec_s = []
-    masked_test_loss_s = []
-    masked_test_prec_s = []
-
     trainer = CNNTrainer(args, model, logdir=logdir, sample_name=args.sample_name)
 
     # learn
     if args.train:
         for epoch in tqdm(range(1, args.epochs + 1)):
-            print('Train on sampled dateset...')
+            print('Train on original dateset...')
             train_loss, train_prec = trainer.train(epoch, og_train_loader, optimizer, cyclic_scheduler=scheduler)
             # scheduler.step()
             print('Test on original dateset...')
             og_test_loss, og_test_prec = trainer.test(og_test_loader)
-            print('Test on sampled dateset...')
-            masked_test_loss, masked_test_prec = trainer.test(sampled_test_loader)
 
             x_epoch.append(epoch)
             train_loss_s.append(train_loss)
             train_prec_s.append(train_prec)
             og_test_loss_s.append(og_test_loss)
             og_test_prec_s.append(og_test_prec)
-            masked_test_loss_s.append(masked_test_loss)
-            masked_test_prec_s.append(masked_test_prec)
             draw_curve(os.path.join(logdir, 'learning_curve.jpg'), x_epoch, train_loss_s, train_prec_s,
-                       og_test_loss_s, og_test_prec_s, masked_test_loss_s, masked_test_prec_s)
+                       og_test_loss_s, og_test_prec_s, )
         # save
         torch.save(model.state_dict(), os.path.join(logdir, 'model.pth'))
     else:
@@ -195,9 +196,9 @@ def main(args):
     trainer.test(sampled_test_loader, args.num_colors, args.epochs, visualize=args.visualize)
     print(f'Average image size: {buffer_size_counter.size[0] / len(sampled_test_set):.1f}; '
           f'Bit per pixel: {buffer_size_counter.size[0] / len(sampled_test_set) / H / W:.3f}')
-    buffer_size_counter.reset()
     # with adversarial
     if args.adversarial:
+        buffer_size_counter.reset()
         print('********************    [adversarial first]    ********************')
         trainer = CNNTrainer(args, model, adversarial=args.adversarial, epsilon=args.epsilon,
                              sample_name=args.sample_name, sample_trans=sample_trans)
@@ -205,8 +206,8 @@ def main(args):
         trainer.test(og_test_loader, args.num_colors, visualize=args.visualize)
         print(f'Average image size: {buffer_size_counter.size[0] / len(sampled_test_set):.1f}; '
               f'Bit per pixel: {buffer_size_counter.size[0] / len(sampled_test_set) / H / W:.3f}')
-        buffer_size_counter.reset()
 
+        # buffer_size_counter.reset()
         # print('********************    [quantization first]    ********************')
         # trainer = CNNTrainer(model, adversarial=args.adversarial,
         #                      mean_var=mean_var, sample_method=args.sample_name)
@@ -230,14 +231,13 @@ if __name__ == '__main__':
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200'])
+                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200', 'voc'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128,
                         help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=60, help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=0.1, help='learning rate (default: 0.1)')
-    parser.add_argument('--step_size', type=int, default=30)
     parser.add_argument('--weight_decay', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum')
     parser.add_argument('--log_interval', type=int, default=100,
