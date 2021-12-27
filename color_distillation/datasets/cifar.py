@@ -5,7 +5,7 @@ import os.path
 import numpy as np
 import pickle
 from typing import Any, Callable, Optional, Tuple
-import torchvision.transforms as T
+import color_distillation.utils.transforms as T
 import torch.multiprocessing as mp
 
 from torchvision.datasets.vision import VisionDataset
@@ -196,10 +196,7 @@ class CIFAR100(CIFAR10):
 
 
 if __name__ == '__main__':
-    import color_distillation.utils.transforms as T
-    from color_distillation.utils.transforms import MedianCut
-
-    dataset = CIFAR10('/home/houyz/Data/cifar10', color_quantize=MedianCut(),
+    dataset = CIFAR10('/home/houyz/Data/cifar10', color_quantize=T.MedianCut(),
                       transform=T.Compose([T.RandomHorizontalFlip()]))
     img, (label, (quantized_img, index_map)) = dataset.__getitem__(0)
     pass

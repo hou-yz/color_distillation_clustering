@@ -8,7 +8,7 @@ import os
 import os.path
 from typing import Any, Callable, cast, Dict, List, Optional, Tuple
 import numpy as np
-import torchvision.transforms as T
+import color_distillation.utils.transforms as T
 import torch.multiprocessing as mp
 
 
@@ -291,10 +291,7 @@ class ImageFolder(DatasetFolder):
 
 
 if __name__ == '__main__':
-    import color_distillation.utils.transforms as T
-    from color_distillation.utils.transforms import MedianCut
-
-    dataset = ImageFolder('/home/houyz/Data/tiny200/train', color_quantize=MedianCut(),
+    dataset = ImageFolder('/home/houyz/Data/tiny200/train', color_quantize=T.MedianCut(),
                           transform=T.Compose([T.RandomHorizontalFlip()]))
     img, target = dataset.__getitem__(0)
     pass

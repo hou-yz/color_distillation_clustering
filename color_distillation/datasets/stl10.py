@@ -3,7 +3,7 @@ import random
 import os
 import os.path
 import numpy as np
-import torchvision.transforms as T
+import color_distillation.utils.transforms as T
 import torch.multiprocessing as mp
 from typing import Any, Callable, Optional, Tuple
 
@@ -215,10 +215,7 @@ class STL10(VisionDataset):
 
 
 if __name__ == '__main__':
-    import color_distillation.utils.transforms as T
-    from color_distillation.utils.transforms import MedianCut
-
-    dataset = STL10('/home/houyz/Data/stl10', color_quantize=MedianCut(),
+    dataset = STL10('/home/houyz/Data/stl10', color_quantize=T.MedianCut(),
                     transform=T.Compose([T.RandomHorizontalFlip()]))
     img, (label, (quantized_img, index_map)) = dataset.__getitem__(0)
     pass
