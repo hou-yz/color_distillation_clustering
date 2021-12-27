@@ -10,7 +10,6 @@ import random
 from tqdm import tqdm
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import color_distillation.utils.transforms as T
@@ -18,10 +17,7 @@ from color_distillation import models, datasets
 from color_distillation.models.color_cnn import ColorCNN
 from color_distillation.trainer import CNNTrainer
 from color_distillation.utils.sampler import RandomSeqSampler
-from color_distillation.utils.load_checkpoint import checkpoint_loader
-from color_distillation.utils.draw_curve import draw_curve
 from color_distillation.utils.logger import Logger
-from color_distillation.utils.image_utils import DeNormalize
 
 
 def main(args):
@@ -210,7 +206,7 @@ def main(args):
         # print('********************    [quantization first]    ********************')
         # trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var)
         # print(f'Test in {args.mode} mode [adversarial: {args.adversarial}]...')
-        test(test_mode=args.mode)
+        # test(test_mode=args.mode)
 
 
 if __name__ == '__main__':
@@ -241,7 +237,7 @@ if __name__ == '__main__':
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200'])
+                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200', 'voc'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128)

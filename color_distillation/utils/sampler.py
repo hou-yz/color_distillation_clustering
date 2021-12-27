@@ -5,6 +5,7 @@ from torch.utils.data.sampler import Sampler
 
 class RandomSeqSampler(Sampler):
     def __init__(self, data_source, seed=0):
+        super().__init__(data_source)
         self.data_source = data_source
         random.seed(seed)
         np.random.seed(seed)
