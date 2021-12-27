@@ -3,6 +3,9 @@ import os
 from shutil import move
 from os import rmdir
 
+# reformat code from
+# https://github.com/tjmoon0104/Tiny-ImageNet-Classifier/blob/master/utils/tiny-imgnet-val-reformat.ipynb
+
 target_folder = os.path.expanduser('~/Data/tiny200/val/')
 
 val_dict = {}
