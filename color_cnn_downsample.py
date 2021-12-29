@@ -110,6 +110,19 @@ def main(args):
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
         test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
+    elif args.dataset == 'voc':
+        num_class = 20
+        args.batch_size = 32
+        pixsim_sample = 0.3
+        data_path = os.path.expanduser('~/Data/pascal_VOC')
+
+        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(), ])
+        test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), ])
+        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(112, padding=14),
+                                      T.RandomRotation(degrees=15), T.RandomErasing()])
+
+        train_set = datasets.VOC(data_path, image_set='train', transform=train_trans, color_quantize=T.MedianCut())
+        test_set = datasets.VOC(data_path, image_set='val', transform=test_trans)
     else:
         raise Exception
 

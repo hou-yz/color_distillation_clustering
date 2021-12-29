@@ -84,6 +84,7 @@ class CNNTrainer(object):
         else:
             raise Exception
         losses, correct, miss = 0, 0, 1e-8
+        scores, labels = [], []
         t0 = time.time()
 
         # init
@@ -96,10 +97,10 @@ class CNNTrainer(object):
             activation = []
             img = img.cuda()
             if isinstance(target, list):
-                label, quantized_img, index_map = target[0].cuda(), target[1][0].cuda(), target[1][1].cuda()
+                target, quantized_img, index_map = target[0].cuda(), target[1][0].cuda(), target[1][1].cuda()
                 num_colors_batch = 2 ** int(np.log2(index_map.max().item() + 1) + 0.5)
             else:
-                label = target.cuda()
+                target = target.cuda()
             if self.colorcnn:
                 # OG img
                 if self.opts.kd_ratio or self.opts.perceptual_ratio:
@@ -124,12 +125,14 @@ class CNNTrainer(object):
             else:
                 output = self.classifier(self.norm(img))
             if self.opts.dataset == 'voc':
-                ce_loss = self.BCE_loss(output, label)
+                scores.append(torch.sigmoid(output).detach().cpu())
+                labels.append(target.cpu())
+                ce_loss = self.BCE_loss(output, target)
             else:
                 pred = torch.argmax(output, 1)
-                correct += pred.eq(label).sum().item()
-                miss += label.shape[0] - pred.eq(label).sum().item()
-                ce_loss = self.CE_loss(output, label)
+                correct += pred.eq(target).sum().item()
+                miss += target.shape[0] - pred.eq(target).sum().item()
+                ce_loss = self.CE_loss(output, target)
             if self.colorcnn:
                 B, _, H, W = img.shape
                 # all colors taken
@@ -176,8 +179,15 @@ class CNNTrainer(object):
                 # print(cyclic_scheduler.last_epoch, optimizer.param_groups[0]['lr'])
                 t1 = time.time()
                 t_epoch = t1 - t0
-                print(f'Train Epoch: {epoch}, Batch:{batch_idx + 1}, \tLoss: {losses / (batch_idx + 1):.3f}, '
-                      f'Prec: {100. * correct / (correct + miss):.1f}%, Time: {t_epoch:.3f}')
+                print(f'Train epoch: {epoch}, batch:{batch_idx + 1}, \tloss: {losses / (batch_idx + 1):.3f}, ')
+
+                if self.opts.dataset == 'voc':
+                    scores = torch.cat(scores, dim=0)
+                    labels = torch.cat(labels, dim=0)
+                    mAP = average_precision_score(labels[1:], scores[1:])
+                    print(f'mean average prec: {100. * mAP:.2f}%, time: {t_epoch:.3f}')
+                else:
+                    print(f'prec: {100. * correct / (correct + miss):.1f}%, time: {t_epoch:.3f}')
                 if self.colorcnn:
                     log = f'ce: {ce_loss.item():.3f}, recons: {recons_loss.item():.3f}, color_appear: ' \
                           f'{color_appear_loss.item():.3f}, conf: {conf_loss.item():.3f}, info: {info_loss.item():.3f}'

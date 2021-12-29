@@ -78,9 +78,9 @@ def main(args):
         og_test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
 
-        og_train_set = datasets.ImageNet(data_path, split='train', transform=og_train_trans, )
+        og_train_set = datasets.ImageNet(data_path, split='train', transform=og_train_trans)
         og_test_set = datasets.ImageNet(data_path, split='val', transform=og_test_trans)
-        sampled_test_set = datasets.ImageNet(data_path, split='val', transform=sampled_test_trans, )
+        sampled_test_set = datasets.ImageNet(data_path, split='val', transform=sampled_test_trans)
     elif args.dataset == 'style14mini':
         num_class = 14
         args.batch_size = 32
@@ -91,9 +91,9 @@ def main(args):
         og_test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
 
-        og_train_set = datasets.ImageFolder(data_path + '/train', transform=og_train_trans, )
+        og_train_set = datasets.ImageFolder(data_path + '/train', transform=og_train_trans)
         og_test_set = datasets.ImageFolder(data_path + '/val', transform=og_test_trans)
-        sampled_test_set = datasets.ImageFolder(data_path + '/val', transform=sampled_test_trans, )
+        sampled_test_set = datasets.ImageFolder(data_path + '/val', transform=sampled_test_trans)
     elif args.dataset == 'stl10':
         num_class = 10
         # smaller batch size
@@ -113,9 +113,9 @@ def main(args):
         og_test_trans = T.Compose([T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.ToTensor(), ])
 
-        og_train_set = datasets.ImageFolder(data_path + '/train', transform=og_train_trans, )
+        og_train_set = datasets.ImageFolder(data_path + '/train', transform=og_train_trans)
         og_test_set = datasets.ImageFolder(data_path + '/val', transform=og_test_trans)
-        sampled_test_set = datasets.ImageFolder(data_path + '/val', transform=sampled_test_trans, )
+        sampled_test_set = datasets.ImageFolder(data_path + '/val', transform=sampled_test_trans)
     elif args.dataset == 'voc':
         num_class = 20
         data_path = os.path.expanduser('~/Data/pascal_VOC')
@@ -123,9 +123,9 @@ def main(args):
         og_test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
         sampled_test_trans = T.Compose(sample_trans + [T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
 
-        og_train_set = datasets.VOC(data_path, image_set='train', transform=og_train_trans, )
+        og_train_set = datasets.VOC(data_path, image_set='train', transform=og_train_trans)
         og_test_set = datasets.VOC(data_path, image_set='val', transform=og_test_trans)
-        sampled_test_set = datasets.VOC(data_path, image_set='val', transform=sampled_test_trans, )
+        sampled_test_set = datasets.VOC(data_path, image_set='val', transform=sampled_test_trans)
     else:
         raise Exception
 
@@ -136,7 +136,7 @@ def main(args):
                                 num_workers=args.num_workers, pin_memory=True)
     sampled_test_loader = DataLoader(sampled_test_set, batch_size=args.batch_size * 2,
                                      # sampler=RandomSeqSampler(og_test_set),
-                                     num_workers=args.num_workers, pin_memory=True)
+                                     num_workers=0, pin_memory=True)
 
     logdir = 'logs/grid/{}/{}/{}colors'.format(args.dataset, args.arch,
                                                'full_')  # if args.num_colors is None else args.num_colors
