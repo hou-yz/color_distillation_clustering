@@ -1,6 +1,7 @@
 from .alexnet import AlexNet
 from .vgg import VGG16
 from .resnet import ResNet18, ResNet50, ResNet152
+from .deeplabv3 import DeepLabV3
 
 custom_factory = {
     'alexnet': AlexNet,
@@ -8,6 +9,7 @@ custom_factory = {
     'resnet18': ResNet18,
     'resnet50': ResNet50,
     'resnet152': ResNet152,
+    'deeplab': DeepLabV3
 }
 
 from torchvision.models.alexnet import alexnet
@@ -31,7 +33,7 @@ def create(name, out_channel):
     """
     Create a model instance.
     """
-    if out_channel == 10 or out_channel == 100 or out_channel == 200:
+    if out_channel == 10 or out_channel == 100 or out_channel == 200 or out_channel == 21:
         # use custom models
         if name not in custom_factory:
             raise KeyError("Unknown model:", name)

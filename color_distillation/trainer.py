@@ -14,10 +14,12 @@ from PIL import Image
 import cv2
 from io import BytesIO
 from sklearn.metrics import average_precision_score
+from color_distillation.evaluation.miou import eval_metrics
 from color_distillation.loss import LabelSmoothLoss, KDLoss, PixelSimLoss
 from color_distillation.models.alexnet import AlexNet
 from color_distillation.models.vgg import VGG
 from color_distillation.models.resnet import ResNet
+from color_distillation.models.deeplabv3 import DeepLabV3
 from color_distillation.utils.image_utils import Normalize
 
 
@@ -37,6 +39,7 @@ class CNNTrainer(object):
         # loss
         self.CE_loss = LabelSmoothLoss(opts.label_smooth) if opts.label_smooth else nn.CrossEntropyLoss()
         self.BCE_loss = nn.BCEWithLogitsLoss()
+        self.SEG_loss = nn.CrossEntropyLoss(ignore_index=255)
         self.KD_loss = KDLoss()
         self.MSE_loss = nn.MSELoss()
         self.pixel_loss = PixelSimLoss(pixsim_sample)
@@ -81,10 +84,11 @@ class CNNTrainer(object):
             handle = self.classifier.features.register_forward_hook(cnn_activation_hook)
         elif isinstance(self.classifier, ResNet) or isinstance(self.classifier, torchvision.models.ResNet):
             handle = self.classifier.layer4.register_forward_hook(cnn_activation_hook)
+        elif isinstance(self.classifier, DeepLabV3):
+            handle = self.classifier.base.layer4.register_forward_hook(cnn_activation_hook)
         else:
             raise Exception
         losses, correct, miss = 0, 0, 1e-8
-        scores, labels = [], []
         t0 = time.time()
 
         # init
@@ -120,19 +124,25 @@ class CNNTrainer(object):
                 else:
                     transformed_img = transformed_img.clamp(0, 1)
                     norm_jit_img = self.norm(self.color_jitter(transformed_img))
-                trans_norm_jit_img = self.post_trans(norm_jit_img)
+                if self.opts.dataset == 'voc':
+                    trans_norm_jit_img, target = self.post_trans(norm_jit_img, target)
+                else:
+                    trans_norm_jit_img = self.post_trans(norm_jit_img)
                 output = self.classifier(trans_norm_jit_img)
             else:
                 output = self.classifier(self.norm(img))
             if self.opts.dataset == 'voc':
-                scores.append(torch.sigmoid(output).detach().cpu())
-                labels.append(target.cpu())
-                ce_loss = self.BCE_loss(output, target)
+                B, H, W = target.shape
+                output = F.interpolate(output, size=[H, W], mode='bilinear')
+                ce_loss = self.SEG_loss(output, target)
+                pred = torch.argmax(output, dim=1)
+                correct += pred.eq(target).sum().item()
+                miss += torch.tensor(target.shape).prod().item() - pred.eq(target).sum().item()
             else:
+                ce_loss = self.CE_loss(output, target)
                 pred = torch.argmax(output, 1)
                 correct += pred.eq(target).sum().item()
                 miss += target.shape[0] - pred.eq(target).sum().item()
-                ce_loss = self.CE_loss(output, target)
             if self.colorcnn:
                 B, _, H, W = img.shape
                 # all colors taken
@@ -180,14 +190,7 @@ class CNNTrainer(object):
                 t1 = time.time()
                 t_epoch = t1 - t0
                 print(f'Train epoch: {epoch}, batch:{batch_idx + 1}, \tloss: {losses / (batch_idx + 1):.3f}, ')
-
-                if self.opts.dataset == 'voc':
-                    scores = torch.cat(scores, dim=0)
-                    labels = torch.cat(labels, dim=0)
-                    mAP = average_precision_score(labels[1:], scores[1:])
-                    print(f'mean average prec: {100. * mAP:.2f}%, time: {t_epoch:.3f}')
-                else:
-                    print(f'prec: {100. * correct / (correct + miss):.1f}%, time: {t_epoch:.3f}')
+                print(f'prec: {100. * correct / (correct + miss):.1f}%, time: {t_epoch:.3f}')
                 if self.colorcnn:
                     log = f'ce: {ce_loss.item():.3f}, recons: {recons_loss.item():.3f}, color_appear: ' \
                           f'{color_appear_loss.item():.3f}, conf: {conf_loss.item():.3f}, info: {info_loss.item():.3f}'
@@ -195,12 +198,11 @@ class CNNTrainer(object):
                         log += f', pixsim: {pixsim_loss.item():.3f}'
                     print(log)
 
-        handle.remove()
+                if self.logdir is not None and self.colorcnn:
+                    self.sample_image(img, num_colors_batch, quantized_img=quantized_img,
+                                      fname=f'{self.logdir}/imgs/{epoch:03d}_train.png')
 
-        if self.logdir is not None and self.colorcnn:
-            img, target = next(iter(dataloader))
-            self.sample_image(img.cuda(), num_colors_batch, quantized_img=target[1][0].cuda(),
-                              fname=f'{self.logdir}/imgs/{epoch:03d}_train.png')
+        handle.remove()
 
         return losses / len(dataloader), correct / (correct + miss)
 
@@ -281,7 +283,8 @@ class CNNTrainer(object):
         if self.colorcnn:
             self.colorcnn.eval()
         losses, correct, miss = 0, 0, 1e-8
-        scores, labels = [], []
+        total_inter, total_union = 0, 0
+        total_correct, total_label = 0, 0
         t0 = time.time()
 
         if visualize:
@@ -333,9 +336,20 @@ class CNNTrainer(object):
             with torch.no_grad():
                 output = self.classifier(self.norm(data_quantized))
             if self.opts.dataset == 'voc':
-                scores.append(torch.sigmoid(output).cpu())
-                labels.append(target.cpu())
-                loss = self.BCE_loss(output, target)
+                B, H, W = target.shape
+                output = F.interpolate(output, size=[H, W], mode='bilinear')
+                loss = self.SEG_loss(output, target)
+                correct, labeled, inter, union = eval_metrics(output, target, 21, 255)
+
+                # PRINT INFO
+                total_inter, total_union = total_inter + inter, total_union + union
+                total_correct, total_label = total_correct + correct, total_label + labeled
+                pixAcc = 1.0 * total_correct / (np.spacing(1) + total_label)
+                IoU = 1.0 * total_inter / (np.spacing(1) + total_union)
+                mIoU = IoU.mean()
+                seg_metrics = {"Pixel_Accuracy": np.round(pixAcc, 3), "Mean_IoU": np.round(mIoU, 3),
+                               # "Class_IoU": dict(zip(range(self.num_classes), np.round(IoU, 3)))
+                               }
             else:
                 pred = torch.argmax(output, 1)
                 correct += pred.eq(target).sum().item()
@@ -366,15 +380,12 @@ class CNNTrainer(object):
                     break
 
         if self.opts.dataset == 'voc':
-            scores = torch.cat(scores, dim=0)
-            labels = torch.cat(labels, dim=0)
-            mAP = average_precision_score(labels[1:], scores[1:])
-            print(f'Test, loss: {losses / len(dataloader):.3f}, mean average prec: {100. * mAP:.2f}%, ')
+            print(f'Test, loss: {losses / len(dataloader):.3f}, {seg_metrics}, ')
         else:
             print(f'Test, loss: {losses / len(dataloader):.3f}, prec: {100. * correct / (correct + miss):.2f}%, ')
         print(f'time: {time.time() - t0:.1f}, recons loss: {np.mean(recons_loss_list):.3f}')
         if self.colorcnn:
-            print(f'Average number of colors per image: {number_of_colors / dataset_size}; \n'
+            print(f'Average number of colors per image: {number_of_colors / dataset_size:.1f}; \n'
                   f'Average image size: {buffer_size_counter / dataset_size:.1f}; '
                   f'Bit per pixel: {buffer_size_counter / dataset_size / H / W:.3f}')
 
@@ -389,7 +400,7 @@ class CNNTrainer(object):
             img, _ = next(it)
             self.sample_image(img.cuda(), num_colors, fname=f'{self.logdir}/imgs/{epoch:03d}_{num_colors}.png')
 
-        return losses / len(dataloader), mAP if self.opts.dataset == 'voc' else correct / (correct + miss)
+        return losses / len(dataloader), mIoU if self.opts.dataset == 'voc' else correct / (correct + miss)
 
     def sample_image(self, img, num_colors, fname, quantized_img=None, nrow=4):
         if self.colorcnn:

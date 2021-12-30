@@ -10,7 +10,7 @@ class MedianCut(object):
         self.num_colors = num_colors
         self.dither = dither
 
-    def __call__(self, img):
+    def __call__(self, img, tgt=None):
         if self.num_colors is not None:
             if not self.dither:
                 sampled_img = img.quantize(colors=self.num_colors, method=0).convert('RGB')
@@ -19,7 +19,10 @@ class MedianCut(object):
                 sampled_img = error_diffusion_dithering(img, palette).convert('RGB')
         else:
             sampled_img = img
-        return sampled_img
+        if tgt is not None:
+            return sampled_img, tgt
+        else:
+            return sampled_img
 
 
 class OCTree(object):
@@ -27,12 +30,15 @@ class OCTree(object):
         self.num_colors = num_colors
         self.dither = dither
 
-    def __call__(self, img):
+    def __call__(self, img, tgt=None):
         if self.num_colors is not None:
             sampled_img = img.quantize(colors=self.num_colors, method=2).convert('RGB')
         else:
             sampled_img = img
-        return sampled_img
+        if tgt is not None:
+            return sampled_img, tgt
+        else:
+            return sampled_img
 
 
 class KMeans(object):
@@ -40,24 +46,30 @@ class KMeans(object):
         self.num_colors = num_colors
         self.dither = dither
 
-    def __call__(self, img):
+    def __call__(self, img, tgt=None):
         if self.num_colors is not None:
             sampled_img = img.quantize(colors=self.num_colors, kmeans=2).convert('RGB')
         else:
             sampled_img = img
-        return sampled_img
+        if tgt is not None:
+            return sampled_img, tgt
+        else:
+            return sampled_img
 
 
 class PNGCompression(object):
     def __init__(self, buffer_size_counter=None):
         self.buffer_size_counter = buffer_size_counter
 
-    def __call__(self, img):
+    def __call__(self, img, tgt=None):
         png_buffer = BytesIO()
         img.save(png_buffer, "PNG")
         if self.buffer_size_counter is not None:
             self.buffer_size_counter.update(png_buffer.getbuffer().nbytes)
-        return img
+        if tgt is not None:
+            return img, tgt
+        else:
+            return img
 
 
 class JpegCompression(object):
@@ -65,10 +77,13 @@ class JpegCompression(object):
         self.buffer_size_counter = buffer_size_counter
         self.quality = quality
 
-    def __call__(self, img):
+    def __call__(self, img, tgt=None):
         jpeg_buffer = BytesIO()
         img.save(jpeg_buffer, "JPEG", quality=self.quality)
         self.buffer_size_counter.update(jpeg_buffer.getbuffer().nbytes)
         jpeg_buffer.seek(0)
         sampled_img = Image.open(jpeg_buffer)
-        return sampled_img
+        if tgt is not None:
+            return sampled_img, tgt
+        else:
+            return sampled_img

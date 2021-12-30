@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from color_distillation import datasets
 import color_distillation.utils.transforms as T
+import color_distillation.utils.ext_transforms as exT
 from color_distillation import models
 from color_distillation.trainer import CNNTrainer
 from color_distillation.utils.sampler import RandomSeqSampler
@@ -117,15 +118,23 @@ def main(args):
         og_test_set = datasets.ImageFolder(data_path + '/val', transform=og_test_trans)
         sampled_test_set = datasets.ImageFolder(data_path + '/val', transform=sampled_test_trans)
     elif args.dataset == 'voc':
-        num_class = 20
+        num_class = 21
+        args.lr = 0.01
+        args.batch_size = 8
+        args.arch = 'deeplab'
+        args.log_interval = 1000
+        base_lr_ratio = 0.1
+        crop_size = [160, 160]
         data_path = os.path.expanduser('~/Data/pascal_VOC')
-        og_train_trans = T.Compose([T.RandomResizedCrop(112), T.RandomHorizontalFlip(), T.ToTensor(), ])
-        og_test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
-        sampled_test_trans = T.Compose(sample_trans + [T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
+        og_train_trans = exT.ExtCompose([exT.ExtResize(crop_size), exT.ExtRandomScale(scale=(0.5, 2)),
+                                         exT.ExtRandomCrop(size=crop_size, pad_if_needed=True),
+                                         exT.ExtRandomHorizontalFlip(), exT.ExtToTensor()])
+        og_test_trans = exT.ExtCompose([exT.ExtResize(crop_size), exT.ExtToTensor(), ])
+        sampled_test_trans = exT.ExtCompose(sample_trans + [exT.ExtResize(crop_size), exT.ExtToTensor(), ])
 
-        og_train_set = datasets.VOC(data_path, image_set='train', transform=og_train_trans)
-        og_test_set = datasets.VOC(data_path, image_set='val', transform=og_test_trans)
-        sampled_test_set = datasets.VOC(data_path, image_set='val', transform=sampled_test_trans)
+        og_train_set = datasets.VOC(data_path, image_set='train', transforms=og_train_trans)
+        og_test_set = datasets.VOC(data_path, image_set='val', transforms=og_test_trans)
+        sampled_test_set = datasets.VOC(data_path, image_set='val', transforms=sampled_test_trans)
     else:
         raise Exception
 
@@ -148,14 +157,37 @@ def main(args):
 
     # model
     model = models.create(args.arch, num_class).cuda()
-    param_dicts = [{"params": [p for n, p in model.named_parameters() if
-                               'classifier' not in n and 'fc' not in n and p.requires_grad],
-                    "lr": args.lr * base_lr_ratio},
-                   {"params": [p for n, p in model.named_parameters() if
-                               ('classifier' in n or 'fc' in n) and p.requires_grad], }]
-    optimizer = optim.SGD(param_dicts, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
-                                                    steps_per_epoch=len(og_train_loader), epochs=args.epochs)
+    if args.dataset == 'voc':
+        param_dicts = [{"params": [p for n, p in model.named_parameters() if 'base' not in n and p.requires_grad], },
+                       {"params": [p for n, p in model.named_parameters() if 'base' in n and p.requires_grad],
+                        "lr": args.lr * base_lr_ratio, }, ]
+        optimizer = optim.SGD(param_dicts, lr=args.lr, momentum=0.9, weight_decay=1e-4, nesterov=True)
+
+        def lr_scheduler_wrapper(epochs, len_loader, decay=0.9, warmup=0):
+            def warm_and_decay_lr_scheduler(step: int):
+                total_steps = epochs * len_loader
+                warmup_steps = warmup * total_steps
+                assert step <= total_steps
+                if step < warmup_steps:
+                    factor = step / warmup_steps
+                else:
+                    factor = (1 - step / (total_steps + 1e-8)) ** decay
+                return factor
+
+            return warm_and_decay_lr_scheduler
+
+        scheduler = optim.lr_scheduler.LambdaLR(optimizer=optimizer,
+                                                lr_lambda=lr_scheduler_wrapper(args.epochs, len(og_train_loader)))
+
+    else:
+        param_dicts = [{"params": [p for n, p in model.named_parameters() if
+                                   'classifier' not in n and 'fc' not in n and p.requires_grad],
+                        "lr": args.lr * base_lr_ratio},
+                       {"params": [p for n, p in model.named_parameters() if
+                                   ('classifier' in n or 'fc' in n) and p.requires_grad], }]
+        optimizer = optim.SGD(param_dicts, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
+                                                        steps_per_epoch=len(og_train_loader), epochs=args.epochs)
 
     # draw curve
     x_epoch = []

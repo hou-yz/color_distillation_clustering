@@ -13,6 +13,7 @@ import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import color_distillation.utils.transforms as T
+import color_distillation.utils.ext_transforms as exT
 from color_distillation import models, datasets
 from color_distillation.models.color_cnn import ColorCNN
 from color_distillation.trainer import CNNTrainer
@@ -36,7 +37,7 @@ def main(args):
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed(args.seed)
         random.seed(args.seed)
-    
+
     if args.deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -111,18 +112,22 @@ def main(args):
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
         test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
     elif args.dataset == 'voc':
-        num_class = 20
-        args.batch_size = 32
-        pixsim_sample = 0.3
+        num_class = 21
+        # args.lr = 0.001
+        args.batch_size = 8
+        args.num_workers = 8
+        args.arch = 'deeplab'
+        pixsim_sample = 0.05
+        crop_size = [160, 160]
         data_path = os.path.expanduser('~/Data/pascal_VOC')
+        train_trans = exT.ExtCompose([exT.ExtResize(crop_size), exT.ExtRandomHorizontalFlip()])
+        test_trans = exT.ExtCompose([exT.ExtResize(crop_size), ])
+        train_post_trans = exT.ExtCompose([exT.ExtRandomHorizontalFlip(), exT.ExtRandomScale([0.5, 2.0]),
+                                           exT.ExtRandomCrop(size=crop_size, pad_if_needed=True),
+                                           exT.ExtRandomErasing()])
 
-        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(), ])
-        test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), ])
-        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(112, padding=14),
-                                      T.RandomRotation(degrees=15), T.RandomErasing()])
-
-        train_set = datasets.VOC(data_path, image_set='train', transform=train_trans, color_quantize=T.MedianCut())
-        test_set = datasets.VOC(data_path, image_set='val', transform=test_trans)
+        train_set = datasets.VOC(data_path, image_set='train', transforms=train_trans, color_quantize=T.MedianCut())
+        test_set = datasets.VOC(data_path, image_set='val', transforms=test_trans)
     else:
         raise Exception
 
@@ -181,7 +186,7 @@ def main(args):
     # then train ColorCNN
     trainer = CNNTrainer(args, classifier, model, train_post_trans, logdir=logdir, pixsim_sample=pixsim_sample)
 
-    def test(test_mode, epoch=None):
+    def multicolor_test(test_mode, epoch=None):
         if args.num_colors > 0:
             print(f'Testing {args.num_colors} colors...')
             trainer.test(test_loader, args.num_colors, epoch=epoch, visualize=args.visualize, test_mode=test_mode)
@@ -198,7 +203,7 @@ def main(args):
             print('Training...')
             trainer.train(epoch, train_loader, optimizer, args.num_colors, scheduler)
             if epoch % 20 == 0:
-                test(test_mode=args.mode, epoch=epoch)
+                multicolor_test(test_mode=args.mode, epoch=epoch)
             # save
             torch.save(model.state_dict(), os.path.join(logdir, 'ColorCNN.pth'))
     else:
@@ -208,14 +213,14 @@ def main(args):
     print(logdir)
     model.eval()
     print(f'Test in {args.mode} mode...')
-    test(test_mode=args.mode, epoch=args.epochs)
+    multicolor_test(test_mode=args.mode, epoch=args.epochs)
     # with adversarial
     if args.adversarial:
         print('********************    [adversarial first]    ********************')
         trainer = CNNTrainer(args, classifier, model, adversarial=args.adversarial, epsilon=args.epsilon,
                              sample_trans='colorcnn')
         print(f'Test in {args.mode} mode [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
-        test(test_mode=args.mode)
+        multicolor_test(test_mode=args.mode)
         # print('********************    [quantization first]    ********************')
         # trainer = CNNTrainer(classifier, model, adversarial=args.adversarial, mean_var=mean_var)
         # print(f'Test in {args.mode} mode [adversarial: {args.adversarial}]...')

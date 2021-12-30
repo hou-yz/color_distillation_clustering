@@ -22,25 +22,47 @@ DATASET_YEAR_DICT = {
         'md5': '6cd6e144f989b92b3379bac3b3de84fd',
         'base_dir': os.path.join('VOCdevkit', 'VOC2012')
     },
+    '2012_aug': {
+        'url': 'http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar',
+        'filename': 'VOCtrainval_11-May-2012.tar',
+        'md5': '6cd6e144f989b92b3379bac3b3de84fd',
+        'base_dir': os.path.join('VOCdevkit', 'VOC2012')
+    },
 }
 
-CLASSES = {'aeroplane': 1, 'bicycle': 2, 'bird': 3, 'boat': 4, 'bottle': 5, 'bus': 6, 'car': 7, 'cat': 8, 'chair': 9,
-           'cow': 10, 'diningtable': 11, 'dog': 12, 'horse': 13, 'motorbike': 14, 'person': 15, 'pottedplant': 16,
-           'sheep': 17, 'sofa': 18, 'train': 19, 'tvmonitor': 20}
+
+def voc_cmap(N=256, normalized=False):
+    def bitget(byteval, idx):
+        return ((byteval & (1 << idx)) != 0)
+
+    dtype = 'float32' if normalized else 'uint8'
+    cmap = np.zeros((N, 3), dtype=dtype)
+    for i in range(N):
+        r = g = b = 0
+        c = i
+        for j in range(8):
+            r = r | (bitget(c, 0) << 7 - j)
+            g = g | (bitget(c, 1) << 7 - j)
+            b = b | (bitget(c, 2) << 7 - j)
+            c = c >> 3
+
+        cmap[i] = np.array([r, g, b])
+
+    cmap = cmap / 255 if normalized else cmap
+    return cmap
 
 
 class VOC(VisionDataset):
     def __init__(
             self,
             root: str,
-            year: str = "2012",
+            year: str = "2012_aug",
             image_set: str = "train",
             download: bool = False,
-            transform: Optional[Callable] = None,
-            target_transform: Optional[Callable] = None,
+            transforms: Optional[Callable] = None,
             color_quantize: Optional[Callable] = None,
     ):
-        super().__init__(root, transform=transform, target_transform=target_transform)
+        super().__init__(root, transforms=transforms)
 
         # shared memory support
         # https://discuss.pytorch.org/t/dataloader-resets-dataset-state/27960/4
@@ -65,11 +87,20 @@ class VOC(VisionDataset):
 
         # use the detection/classification partition
         # find file names
-        with open(f"{self.voc_root}/ImageSets/Main/{image_set}.txt", "r") as f:
-            file_names = [x.strip() for x in f.readlines()]
+        if year == '2012_aug' and image_set == 'train':
+            file_names, excluded_file_names = [], []
+            with open(os.path.join(self.voc_root, "ImageSets/Segmentation/val.txt"), "r") as f:
+                excluded_file_names = [x.strip() for x in f.readlines()]
+            for file in os.listdir(f"{self.voc_root}/SegmentationClassAug"):
+                file_names.append(file.strip('.png'))
+            file_names = set(file_names) - set(excluded_file_names)
+            file_names = sorted(list(file_names))
+        else:
+            with open(f"{self.voc_root}/ImageSets/Segmentation/{image_set}.txt", "r") as f:
+                file_names = [x.strip() for x in f.readlines()]
 
         self.images = [os.path.join(self.voc_root, "JPEGImages", x + ".jpg") for x in file_names]
-        self.targets = [f"{self.voc_root}/Annotations/{x}.xml"
+        self.targets = [f"{self.voc_root}/SegmentationClass{'Aug' if year == '2012_aug' else ''}/{x}.png"
                         for x in file_names]
         assert len(self.images) == len(self.targets)
 
@@ -90,11 +121,10 @@ class VOC(VisionDataset):
             tuple: (image, target) where target is the image segmentation.
         """
         image = Image.open(self.images[index]).convert("RGB")
-        anno = self.parse_voc_xml(ET_parse(self.targets[index]).getroot())
-        target = [CLASSES[obj['name']] for obj in anno['annotation']['object']]
+        target = Image.open(self.targets[index])
 
-        if self.transform is not None:
-            image = self.transform(image)
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
 
         if self.color_quantize is not None:
             self.color_quantize.num_colors = self.num_colors[0]
@@ -103,45 +133,31 @@ class VOC(VisionDataset):
             palette, index_map = np.unique(np.array(quantized_img).reshape([H * W, C]), axis=0, return_inverse=True)
             index_map = Image.fromarray(index_map.reshape(H, W).astype(np.uint8))
             quantized_img, index_map = self.to_tensor(quantized_img), (self.to_tensor(index_map) * 255).round().long()
+
         if isinstance(image, Image.Image):
             image = self.to_tensor(image)
-
-        target = torch.zeros([20]).scatter(0, torch.tensor(target).unique() - 1, 1)
+            target = torch.from_numpy(np.array(target)).long()
 
         if self.color_quantize is not None:
             return image, (target, (quantized_img, index_map))
         else:
             return image, target
 
-    def parse_voc_xml(self, node: ET_Element) -> Dict[str, Any]:
-        voc_dict: Dict[str, Any] = {}
-        children = list(node)
-        if children:
-            def_dic: Dict[str, Any] = collections.defaultdict(list)
-            for dc in map(self.parse_voc_xml, children):
-                for ind, v in dc.items():
-                    def_dic[ind].append(v)
-            if node.tag == "annotation":
-                def_dic["object"] = [def_dic["object"]]
-            voc_dict = {node.tag: {ind: v[0] if len(v) == 1 else v for ind, v in def_dic.items()}}
-        if node.text:
-            text = node.text.strip()
-            if not children:
-                voc_dict[node.tag] = text
-        return voc_dict
-
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+    import color_distillation.utils.ext_transforms as exT
 
 
-    def visualize(image):
+    def visualize(image, target):
+        plt.imshow(target)
+        plt.show()
         plt.imshow(image if isinstance(image, Image.Image) else image.numpy().transpose([1, 2, 0]))
         plt.show()
 
 
     dataset = VOC('/home/houyz/Data/pascal_VOC', color_quantize=T.MedianCut(),
-                  transform=T.Compose([T.RandomResizedCrop(112), T.RandomHorizontalFlip(), ]))
-    img, target = dataset.__getitem__(0)
-    visualize(img)
+                  transforms=exT.ExtCompose([T.MedianCut(2), T.PNGCompression(), exT.ExtRandomScale([0.5, 2.0]), ]))
+    img, tgt = dataset.__getitem__(0)
+    visualize(img, tgt[0])
     pass
