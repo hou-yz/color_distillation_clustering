@@ -29,11 +29,11 @@ def names():
     return sorted(custom_factory.keys())
 
 
-def create(name, out_channel):
+def create(name, out_channel, pretrained=False):
     """
     Create a model instance.
     """
-    if out_channel == 10 or out_channel == 100 or out_channel == 200 or out_channel == 21:
+    if out_channel in [10, 100, 200, 21]:
         # use custom models
         if name not in custom_factory:
             raise KeyError("Unknown model:", name)
@@ -41,11 +41,14 @@ def create(name, out_channel):
     else:
         if name not in torchvision_factory:
             raise KeyError("Unknown model:", name)
-        model = torchvision_factory[name](pretrained=True)
+        model = torchvision_factory[name](pretrained=pretrained)
         if out_channel != 1000:
             import torch.nn as nn
             if hasattr(model, 'fc'):
                 model.fc = nn.Linear(model.fc.in_features, out_channel)
             elif hasattr(model, 'classifier'):
-                model.classifier = nn.Linear(model.classifier.in_features, out_channel)
+                if isinstance(model.classifier, nn.Linear):
+                    model.classifier = nn.Linear(model.classifier.in_features, out_channel)
+                elif isinstance(model.classifier, nn.Sequential):
+                    model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, out_channel)
         return model

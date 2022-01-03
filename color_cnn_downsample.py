@@ -111,12 +111,30 @@ def main(args):
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
         test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
-    elif args.dataset == 'voc':
+    elif args.dataset == 'voc_cls':
+        num_class = 20
+        args.batch_size = 32
+        args.num_workers = 8
+        args.log_interval = 200
+        args.ce_ratio = 10
+        pixsim_sample = 0.3
+        data_path = os.path.expanduser('~/Data/pascal_VOC')
+
+        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(), ])
+        test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), ])
+        train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(112, padding=14),
+                                      T.RandomRotation(degrees=15), T.RandomErasing()])
+
+        train_set = datasets.VOCClassification(data_path, image_set='train', transform=train_trans,
+                                               color_quantize=T.MedianCut())
+        test_set = datasets.VOCClassification(data_path, image_set='val', transform=test_trans)
+    elif args.dataset == 'voc_seg':
         num_class = 21
         # args.lr = 0.001
         args.batch_size = 8
         args.num_workers = 8
         args.arch = 'deeplab'
+        args.log_interval = 2000
         pixsim_sample = 0.05
         crop_size = [160, 160]
         data_path = os.path.expanduser('~/Data/pascal_VOC')
@@ -126,8 +144,9 @@ def main(args):
                                            exT.ExtRandomCrop(size=crop_size, pad_if_needed=True),
                                            exT.ExtRandomErasing()])
 
-        train_set = datasets.VOC(data_path, image_set='train', transforms=train_trans, color_quantize=T.MedianCut())
-        test_set = datasets.VOC(data_path, image_set='val', transforms=test_trans)
+        train_set = datasets.VOCSegmentation(data_path, image_set='train', transforms=train_trans,
+                                             color_quantize=T.MedianCut())
+        test_set = datasets.VOCSegmentation(data_path, image_set='val', transforms=test_trans)
     else:
         raise Exception
 
@@ -255,7 +274,8 @@ if __name__ == '__main__':
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200', 'voc'])
+                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200',
+                                 'voc_cls', 'voc_seg'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128)

@@ -56,6 +56,7 @@ def main(args):
     # dataset
     data_path = os.path.expanduser('~/Data/') + args.dataset
     base_lr_ratio = 1
+    pretrained = False
     if args.dataset == 'cifar10' or args.dataset == 'cifar100':
         num_class = 10 if args.dataset == 'cifar10' else 100
 
@@ -74,6 +75,7 @@ def main(args):
     elif args.dataset == 'imagenet':
         num_class = 1000
         args.batch_size = 32
+        pretrained = True
 
         og_train_trans = T.Compose([T.RandomResizedCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), ])
         og_test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), ])
@@ -84,9 +86,10 @@ def main(args):
         sampled_test_set = datasets.ImageNet(data_path, split='val', transform=sampled_test_trans)
     elif args.dataset == 'style14mini':
         num_class = 14
-        args.batch_size = 32
-        base_lr_ratio = 0.1
         args.lr = 0.01
+        args.batch_size = 32
+        # base_lr_ratio = 0.1
+        # pretrained = True
 
         og_train_trans = T.Compose([T.RandomResizedCrop(112), T.RandomHorizontalFlip(), T.ToTensor(), ])
         og_test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
@@ -117,24 +120,40 @@ def main(args):
         og_train_set = datasets.ImageFolder(data_path + '/train', transform=og_train_trans)
         og_test_set = datasets.ImageFolder(data_path + '/val', transform=og_test_trans)
         sampled_test_set = datasets.ImageFolder(data_path + '/val', transform=sampled_test_trans)
-    elif args.dataset == 'voc':
+    elif args.dataset == 'voc_cls':
+        num_class = 20
+        args.batch_size = 32
+        args.log_interval = 200
+        # base_lr_ratio = 0.1
+        # pretrained = True
+        data_path = os.path.expanduser('~/Data/pascal_VOC')
+
+        og_train_trans = T.Compose([T.RandomResizedCrop(112), T.RandomHorizontalFlip(), T.ToTensor(), ])
+        og_test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
+        sampled_test_trans = T.Compose(sample_trans + [T.Resize(128), T.CenterCrop(112), T.ToTensor(), ])
+
+        og_train_set = datasets.VOCClassification(data_path, image_set='train', transform=og_train_trans)
+        og_test_set = datasets.VOCClassification(data_path, image_set='val', transform=og_test_trans)
+        sampled_test_set = datasets.VOCClassification(data_path, image_set='val', transform=sampled_test_trans)
+    elif args.dataset == 'voc_seg':
         num_class = 21
         args.lr = 0.01
         args.batch_size = 8
         args.arch = 'deeplab'
-        args.log_interval = 1000
+        args.log_interval = 2000
         base_lr_ratio = 0.1
         crop_size = [160, 160]
         data_path = os.path.expanduser('~/Data/pascal_VOC')
+
         og_train_trans = exT.ExtCompose([exT.ExtResize(crop_size), exT.ExtRandomScale(scale=(0.5, 2)),
                                          exT.ExtRandomCrop(size=crop_size, pad_if_needed=True),
                                          exT.ExtRandomHorizontalFlip(), exT.ExtToTensor()])
         og_test_trans = exT.ExtCompose([exT.ExtResize(crop_size), exT.ExtToTensor(), ])
         sampled_test_trans = exT.ExtCompose(sample_trans + [exT.ExtResize(crop_size), exT.ExtToTensor(), ])
 
-        og_train_set = datasets.VOC(data_path, image_set='train', transforms=og_train_trans)
-        og_test_set = datasets.VOC(data_path, image_set='val', transforms=og_test_trans)
-        sampled_test_set = datasets.VOC(data_path, image_set='val', transforms=sampled_test_trans)
+        og_train_set = datasets.VOCSegmentation(data_path, image_set='train', transforms=og_train_trans)
+        og_test_set = datasets.VOCSegmentation(data_path, image_set='val', transforms=og_test_trans)
+        sampled_test_set = datasets.VOCSegmentation(data_path, image_set='val', transforms=sampled_test_trans)
     else:
         raise Exception
 
@@ -145,7 +164,7 @@ def main(args):
                                 num_workers=args.num_workers, pin_memory=True)
     sampled_test_loader = DataLoader(sampled_test_set, batch_size=args.batch_size * 2,
                                      # sampler=RandomSeqSampler(og_test_set),
-                                     num_workers=0, pin_memory=True)
+                                     num_workers=args.num_workers, pin_memory=True)
 
     logdir = 'logs/grid/{}/{}/{}colors'.format(args.dataset, args.arch,
                                                'full_')  # if args.num_colors is None else args.num_colors
@@ -156,8 +175,8 @@ def main(args):
     print(vars(args))
 
     # model
-    model = models.create(args.arch, num_class).cuda()
-    if args.dataset == 'voc':
+    model = models.create(args.arch, num_class, pretrained).cuda()
+    if args.dataset == 'voc_seg':
         param_dicts = [{"params": [p for n, p in model.named_parameters() if 'base' not in n and p.requires_grad], },
                        {"params": [p for n, p in model.named_parameters() if 'base' in n and p.requires_grad],
                         "lr": args.lr * base_lr_ratio, }, ]
@@ -263,7 +282,8 @@ if __name__ == '__main__':
     parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
     parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200', 'voc'])
+                        choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200',
+                                 'voc_cls', 'voc_seg'])
     parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=models.names())
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128,

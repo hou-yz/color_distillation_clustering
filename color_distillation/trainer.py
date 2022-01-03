@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
 from io import BytesIO
-from sklearn.metrics import average_precision_score
+from sklearn import metrics
 from color_distillation.evaluation.miou import eval_metrics
 from color_distillation.loss import LabelSmoothLoss, KDLoss, PixelSimLoss
 from color_distillation.models.alexnet import AlexNet
@@ -89,6 +89,7 @@ class CNNTrainer(object):
         else:
             raise Exception
         losses, correct, miss = 0, 0, 1e-8
+        scores, labels = [], []
         t0 = time.time()
 
         # init
@@ -124,14 +125,18 @@ class CNNTrainer(object):
                 else:
                     transformed_img = transformed_img.clamp(0, 1)
                     norm_jit_img = self.norm(self.color_jitter(transformed_img))
-                if self.opts.dataset == 'voc':
+                if self.opts.dataset == 'voc_seg':
                     trans_norm_jit_img, target = self.post_trans(norm_jit_img, target)
                 else:
                     trans_norm_jit_img = self.post_trans(norm_jit_img)
                 output = self.classifier(trans_norm_jit_img)
             else:
                 output = self.classifier(self.norm(img))
-            if self.opts.dataset == 'voc':
+            if self.opts.dataset == 'voc_cls':
+                ce_loss = self.BCE_loss(output, target)
+                scores.append(torch.sigmoid(output).detach().cpu())
+                labels.append(target.cpu())
+            elif self.opts.dataset == 'voc_seg':
                 B, H, W = target.shape
                 output = F.interpolate(output, size=[H, W], mode='bilinear')
                 ce_loss = self.SEG_loss(output, target)
@@ -189,8 +194,15 @@ class CNNTrainer(object):
                 # print(cyclic_scheduler.last_epoch, optimizer.param_groups[0]['lr'])
                 t1 = time.time()
                 t_epoch = t1 - t0
-                print(f'Train epoch: {epoch}, batch:{batch_idx + 1}, \tloss: {losses / (batch_idx + 1):.3f}, ')
-                print(f'prec: {100. * correct / (correct + miss):.1f}%, time: {t_epoch:.3f}')
+                if self.opts.dataset == 'voc_cls':
+                    mAP = metrics.average_precision_score(torch.cat(labels, dim=0), torch.cat(scores, dim=0))
+                    # accuracy = metrics.accuracy_score(torch.cat(labels, dim=0), torch.cat(scores, dim=0) > 0.5)
+                    # hamming = metrics.hamming_loss(torch.cat(labels, dim=0), torch.cat(scores, dim=0) > 0.5)
+                    print(f'Train epoch: {epoch}, batch:{batch_idx + 1}, \tloss: {losses / (batch_idx + 1):.3f}, '
+                          f'mean average prec: {100. * mAP:.2f}%, time: {t_epoch:.3f}')
+                else:
+                    print(f'Train epoch: {epoch}, batch:{batch_idx + 1}, \tloss: {losses / (batch_idx + 1):.3f}, '
+                          f'prec: {100. * correct / (correct + miss):.1f}%, time: {t_epoch:.3f}')
                 if self.colorcnn:
                     log = f'ce: {ce_loss.item():.3f}, recons: {recons_loss.item():.3f}, color_appear: ' \
                           f'{color_appear_loss.item():.3f}, conf: {conf_loss.item():.3f}, info: {info_loss.item():.3f}'
@@ -283,6 +295,7 @@ class CNNTrainer(object):
         if self.colorcnn:
             self.colorcnn.eval()
         losses, correct, miss = 0, 0, 1e-8
+        scores, labels = [], []
         total_inter, total_union = 0, 0
         total_correct, total_label = 0, 0
         t0 = time.time()
@@ -335,7 +348,11 @@ class CNNTrainer(object):
 
             with torch.no_grad():
                 output = self.classifier(self.norm(data_quantized))
-            if self.opts.dataset == 'voc':
+            if self.opts.dataset == 'voc_cls':
+                loss = self.BCE_loss(output, target)
+                scores.append(torch.sigmoid(output).cpu())
+                labels.append(target.cpu())
+            elif self.opts.dataset == 'voc_seg':
                 B, H, W = target.shape
                 output = F.interpolate(output, size=[H, W], mode='bilinear')
                 loss = self.SEG_loss(output, target)
@@ -379,7 +396,15 @@ class CNNTrainer(object):
                           f'conf: {torch.softmax(output, 1)[i][target[i]] * 100:.1f}%')
                     break
 
-        if self.opts.dataset == 'voc':
+        if self.opts.dataset == 'voc_cls':
+            labels, scores = torch.cat(labels, dim=0), torch.cat(scores, dim=0)
+            mAP = metrics.average_precision_score(labels, scores)
+            accuracy = metrics.accuracy_score(labels, scores > 0.5)
+            # f1 = metrics.f1_score(labels, scores > 0.5, average='macro')
+            hamming = metrics.hamming_loss(labels, scores > 0.5)
+            print(f'Test, loss: {losses / len(dataloader):.3f}, mean average prec: {100. * mAP:.2f}%, '
+                  f'accuracy: {100. * accuracy:.2f}%, hamming loss: {hamming:.4f}, ')
+        elif self.opts.dataset == 'voc_seg':
             print(f'Test, loss: {losses / len(dataloader):.3f}, {seg_metrics}, ')
         else:
             print(f'Test, loss: {losses / len(dataloader):.3f}, prec: {100. * correct / (correct + miss):.2f}%, ')
@@ -400,7 +425,12 @@ class CNNTrainer(object):
             img, _ = next(it)
             self.sample_image(img.cuda(), num_colors, fname=f'{self.logdir}/imgs/{epoch:03d}_{num_colors}.png')
 
-        return losses / len(dataloader), mIoU if self.opts.dataset == 'voc' else correct / (correct + miss)
+        if self.opts.dataset == 'voc_cls':
+            return losses / len(dataloader), mAP
+        elif self.opts.dataset == 'voc_seg':
+            return losses / len(dataloader), mIoU
+        else:
+            return losses / len(dataloader), correct / (correct + miss)
 
     def sample_image(self, img, num_colors, fname, quantized_img=None, nrow=4):
         if self.colorcnn:
