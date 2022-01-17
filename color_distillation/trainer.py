@@ -232,8 +232,9 @@ class CNNTrainer(object):
         def visualize_img(i):
             # index = [8, 49, 50, 61]
             # index = [28 + 64, 40 + 64, 59 + 64, 128, 136]
-            index = [28, 31, 40, 43, 5, 6]
-            image_grid = make_grid(data_quantized[index], nrow=8, normalize=False)
+            # index = [28, 31, 40, 43, 5, 6]
+            index = target.sum(dim=1) > 1
+            image_grid = make_grid(data_quantized[index][[2, 10, 13, 15, 20]], nrow=8, normalize=False)
             # Arange images along y-axis
             save_image(image_grid, f'{self.logdir}/imgs/batch_{num_colors}.png', normalize=False)
 
@@ -270,25 +271,27 @@ class CNNTrainer(object):
                 downsampled_img = Image.fromarray((downsampled_img * 255).astype('uint8')).resize((512, 512),
                                                                                                   Image.NEAREST)
                 downsampled_img.save(f'{self.logdir}/imgs/{self.sample_name}_{num_colors}.png')
-            cam_map = np.sum(activation['classifier'][i] * weight_softmax[pred[i].item()].reshape((-1, 1, 1)), axis=0)
-            cam_map = cam_map - np.min(cam_map)
-            cam_map = cam_map / np.max(cam_map)
-            cam_map = np.uint8(255 * cam_map)
-            cam_map = cv2.resize(cam_map, (downsampled_img.size))
-            heatmap = cv2.applyColorMap(cam_map, cv2.COLORMAP_JET)
-            downsampled_img = cv2.cvtColor(np.asarray(downsampled_img), cv2.COLOR_RGB2BGR)
-            cam_result = np.uint8(heatmap * 0.3 + downsampled_img * 0.5)
-            # cam_result = cv2.putText(cam_result, '{:.1f}%, {}'.format(
-            #     100 * F.softmax(output, dim=1)[i, target[i]].item(),
-            #     'Success' if pred.eq(target)[i].item() else 'Failure'),
-            #                          (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 2,
-            #                          (0, 255, 0) if pred.eq(target)[i].item() else (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.imwrite(f'{self.logdir}/imgs/{self.sample_name}_cam_{num_colors}.png', cam_result)
-            plt.imshow(cv2.cvtColor(cam_result, cv2.COLOR_BGR2RGB))
-            plt.show()
-            # ax.imshow(cam_map, cmap='viridis', aspect='auto')
-            # fig.savefig("activation.png", )
-            # fig.show()
+            if 'voc' not in self.opts.dataset:
+                cam_map = np.sum(activation['classifier'][i] * weight_softmax[pred[i].item()].reshape((-1, 1, 1)),
+                                 axis=0)
+                cam_map = cam_map - np.min(cam_map)
+                cam_map = cam_map / np.max(cam_map)
+                cam_map = np.uint8(255 * cam_map)
+                cam_map = cv2.resize(cam_map, (downsampled_img.size))
+                heatmap = cv2.applyColorMap(cam_map, cv2.COLORMAP_JET)
+                downsampled_img = cv2.cvtColor(np.asarray(downsampled_img), cv2.COLOR_RGB2BGR)
+                cam_result = np.uint8(heatmap * 0.3 + downsampled_img * 0.5)
+                # cam_result = cv2.putText(cam_result, '{:.1f}%, {}'.format(
+                #     100 * F.softmax(output, dim=1)[i, target[i]].item(),
+                #     'Success' if pred.eq(target)[i].item() else 'Failure'),
+                #                          (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 2,
+                #                          (0, 255, 0) if pred.eq(target)[i].item() else (0, 0, 255), 2, cv2.LINE_AA)
+                cv2.imwrite(f'{self.logdir}/imgs/{self.sample_name}_cam_{num_colors}.png', cam_result)
+                plt.imshow(cv2.cvtColor(cam_result, cv2.COLOR_BGR2RGB))
+                plt.show()
+                # ax.imshow(cam_map, cmap='viridis', aspect='auto')
+                # fig.savefig("activation.png", )
+                # fig.show()
 
         buffer_size_counter, number_of_colors, dataset_size = 0, 0, 0
         self.classifier.eval()
@@ -392,8 +395,9 @@ class CNNTrainer(object):
                 if batch_idx == 1:
                     i = 6
                     visualize_img(i)
-                    print(f'pred: {pred[i]}, target: {target[i]}, '
-                          f'conf: {torch.softmax(output, 1)[i][target[i]] * 100:.1f}%')
+                    if 'voc' not in self.opts.dataset:
+                        print(f'pred: {pred[i]}, target: {target[i]}, '
+                              f'conf: {torch.softmax(output, 1)[i][target[i]] * 100:.1f}%')
                     break
 
         if self.opts.dataset == 'voc_cls':
