@@ -47,6 +47,8 @@ def main(args):
         if args.dither: args.sample_name += '_dither'
     elif args.sample_name == 'jpeg':
         sample_trans = [T.JpegCompression(buffer_size_counter, args.jpeg_ratio)]
+    elif args.sample_name == 'canny':
+        sample_trans = [T.CannyEdge(), T.PNGCompression(buffer_size_counter)]
     elif args.sample_name is None:
         sample_trans = [T.PNGCompression(buffer_size_counter)]
         args.sample_name = 'og_img'
@@ -214,7 +216,7 @@ def main(args):
     train_prec_s = []
     og_test_loss_s = []
     og_test_prec_s = []
-    trainer = CNNTrainer(args, model, logdir=logdir, sample_name=args.sample_name)
+    trainer = CNNTrainer(args, {args.arch: model}, logdir=logdir, sample_name=args.sample_name)
 
     # learn
     if args.train:
@@ -223,7 +225,7 @@ def main(args):
             train_loss, train_prec = trainer.train(epoch, og_train_loader, optimizer, cyclic_scheduler=scheduler)
             # scheduler.step()
             print('Test on original dateset...')
-            og_test_loss, og_test_prec = trainer.test(og_test_loader)
+            og_test_loss, og_test_prec = trainer.test(args.arch, og_test_loader)
 
             x_epoch.append(epoch)
             train_loss_s.append(train_loss)
@@ -240,32 +242,12 @@ def main(args):
     pass
     # test
     model.eval()
-    # without adversarial
     print('Test on sampled dateset...')
     img, tgt = next(iter(og_test_loader))
     B, C, H, W = img.shape
-    trainer.test(sampled_test_loader, args.num_colors, args.epochs, visualize=args.visualize)
+    trainer.test(args.arch, sampled_test_loader, args.num_colors, args.epochs, visualize=args.visualize)
     print(f'Average image size: {buffer_size_counter.size[0] / len(sampled_test_set):.1f}; '
           f'Bit per pixel: {buffer_size_counter.size[0] / len(sampled_test_set) / H / W:.3f}')
-    # with adversarial
-    if args.adversarial:
-        buffer_size_counter.reset()
-        print('********************    [adversarial first]    ********************')
-        trainer = CNNTrainer(args, model, adversarial=args.adversarial, epsilon=args.epsilon,
-                             sample_name=args.sample_name, sample_trans=sample_trans)
-        print(f'Test on sampled dateset [adversarial: {args.adversarial} @ epsilon: {args.epsilon}]...')
-        trainer.test(og_test_loader, args.num_colors, visualize=args.visualize)
-        print(f'Average image size: {buffer_size_counter.size[0] / len(sampled_test_set):.1f}; '
-              f'Bit per pixel: {buffer_size_counter.size[0] / len(sampled_test_set) / H / W:.3f}')
-
-        # buffer_size_counter.reset()
-        # print('********************    [quantization first]    ********************')
-        # trainer = CNNTrainer(model, adversarial=args.adversarial,
-        #                      mean_var=mean_var, sample_method=args.sample_name)
-        # print(f'Test on sampled dateset [adversarial: {args.adversarial}]...')
-        # trainer.test(sampled_test_loader, visualize=args.visualize)
-        # print(f'Average image size: {buffer_size_counter.size / len(sampled_test_set):.1f}; '
-        #       f'Bit per pixel: {buffer_size_counter.size / len(sampled_test_set) / H / W:.3f}')
     pass
 
 
@@ -274,13 +256,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Grid-wise down sample')
     parser.add_argument('--num_colors', type=int, default=None, help='down sample ratio for area')
     parser.add_argument('--sample_name', type=str, default=None,
-                        choices=['mcut', 'octree', 'kmeans', 'jpeg'])
+                        choices=['mcut', 'octree', 'kmeans', 'jpeg', 'canny'])
     parser.add_argument('--dither', action='store_true', default=False)
     parser.add_argument('--jpeg_ratio', type=int, default=50)
     parser.add_argument('--label_smooth', type=float, default=0.0)
     parser.add_argument('--train', action='store_true', default=False)
-    parser.add_argument('--adversarial', default=None, type=str, choices=['fgsm', 'deepfool', 'bim', 'cw'])
-    parser.add_argument('--epsilon', default=4, type=int)
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200',
                                  'voc_cls', 'voc_seg'])
