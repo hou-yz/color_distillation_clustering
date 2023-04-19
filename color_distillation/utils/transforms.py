@@ -1,10 +1,26 @@
 import numpy as np
+import cv2
 import torchvision.transforms.functional as F
 from PIL import Image
 from io import BytesIO
 from color_distillation.utils.dither.palette import Palette
 from color_distillation.utils.dither.dithering import error_diffusion_dithering
 from torchvision.transforms import *
+
+
+class CannyEdge(object):
+    def __init__(self):
+        pass
+
+    def __call__(self, img, tgt=None):
+        # Convert RGB to BGR
+        open_cv_img = np.array(img)[:, :, ::-1].copy()
+        sampled_img = cv2.Canny(open_cv_img, 100, 200)
+        sampled_img = Image.fromarray(sampled_img).convert('RGB')
+        if tgt is not None:
+            return sampled_img, tgt
+        else:
+            return sampled_img
 
 
 class SquarePad:
