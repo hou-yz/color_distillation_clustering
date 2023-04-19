@@ -5,14 +5,20 @@ import torch.nn.functional as F
 
 
 class BatchSimLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, normalize=True):
         super(BatchSimLoss, self).__init__()
+        self.normalize = normalize
 
     def forward(self, featmap_src, featmap_tgt):
+        B = featmap_src.shape[0]
         f_src, f_tgt = featmap_src.view([B, -1]), featmap_tgt.view([B, -1])
         A_src, A_tgt = f_src @ f_src.T, f_tgt @ f_tgt.T
-        A_src, A_tgt = F.normalize(A_src, p=2, dim=1), F.normalize(A_tgt, p=2, dim=1)
-        loss_sim = torch.norm(A_src - A_tgt) ** 2 / B
+        if self.normalize:
+            A_src, A_tgt = F.normalize(A_src, p=2, dim=1), F.normalize(A_tgt, p=2, dim=1)
+            loss_sim = torch.norm(A_src - A_tgt) ** 2 / B
+        else:
+            # loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) / sample_idx.shape[-1])
+            loss_sim = F.binary_cross_entropy(A_src, A_tgt)
         return loss_sim
 
 
@@ -27,13 +33,14 @@ class PixelSimLoss(nn.Module):
         sample_idx = [np.random.choice(H * W, int(H * W * self.sample_ratio), replace=False) for _ in range(B)]
         sample_idx = np.stack(sample_idx, axis=0).reshape([B, 1, int(H * W * self.sample_ratio)]).repeat(C, axis=1)
         f_src, f_tgt = featmap_src.view([B, C, H * W]).gather(2, torch.from_numpy(sample_idx).to(featmap_src.device)), \
-                       featmap_tgt.view([B, C, H * W]).gather(2, torch.from_numpy(sample_idx).to(featmap_tgt.device))
+            featmap_tgt.view([B, C, H * W]).gather(2, torch.from_numpy(sample_idx).to(featmap_tgt.device))
         A_src, A_tgt = torch.bmm(f_src.permute([0, 2, 1]), f_src), torch.bmm(f_tgt.permute([0, 2, 1]), f_tgt)
         if self.normalize:
             A_src, A_tgt = F.normalize(A_src, p=2, dim=1), F.normalize(A_tgt, p=2, dim=1)
-            loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) ** 2 / sample_idx.shape[-1])
+            loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=[1, 2]) ** 2 / sample_idx.shape[-1])
         else:
-            loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) / sample_idx.shape[-1])
+            # loss_semantic = torch.mean(torch.norm(A_src - A_tgt, dim=(1, 2)) / sample_idx.shape[-1])
+            loss_semantic = F.binary_cross_entropy(A_src, A_tgt)
         if visualize:
             import matplotlib.pyplot as plt
             # from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -81,10 +88,11 @@ class ChannelSimLoss(nn.Module):
 
 if __name__ == '__main__':
     B, C, H, W = 32, 128, 10, 10
-    feat1, feat2 = torch.ones([B, C, H, W]), torch.zeros([B, C, H, W])
+    feat1, feat2 = torch.ones([B, C, H, W]) / C, torch.zeros([B, C, H, W])
+    feat2[:, 1] = 1
     batch_loss = BatchSimLoss()
     l1 = batch_loss(feat1, feat2)
-    pixel_loss_1 = PixelSimLoss(1)
+    pixel_loss_1 = PixelSimLoss(normalize=False)
     l2_1 = pixel_loss_1(feat1, feat2)
     pixel_loss_2 = PixelSimLoss()
     l2_2 = pixel_loss_2(feat1, feat2)
