@@ -1,3 +1,5 @@
+logs/
+
 # Byte-compiled / optimized / DLL files
 .idea
 .idea/vcs.xml
