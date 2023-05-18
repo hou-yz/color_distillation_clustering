@@ -10,7 +10,7 @@ from torch import nn
 from torch import optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from color_distillation.loss.similarity_preserving import BatchSimLoss
+from color_distillation.loss.similarity_preserving import BatchSimLoss, ce_loss, matching_ce_loss
 
 
 class Dataset2Dpoints(Dataset):
@@ -27,7 +27,7 @@ class Dataset2Dpoints(Dataset):
         return self.points[item], self.labels[item]
 
 
-def plot_decision_boundary(points, labels, model, title=None, cmap='Set3'):
+def plot_decision_boundary(points, labels, model, title=None, cmap='Set3', fname=None):
     num_classes = len(np.unique(labels))
 
     # Set min and max values and give it some padding
@@ -49,12 +49,21 @@ def plot_decision_boundary(points, labels, model, title=None, cmap='Set3'):
 
     # Plot the contour and training examples
     cmap = plt.cm.get_cmap(cmap, num_classes)
-    plt.contourf(xx, yy, Z, cmap=cmap, alpha=0.2)
-    plt.scatter(points[:, 0], points[:, 1], c=labels, cmap=cmap, alpha=0.8)
+    fig1, ax1 = plt.subplots(figsize=(2, 2))
+    ax1.set_aspect('equal')
+    plt.xlim(-2.5, 2.5)
+    plt.ylim(-2.5, 2.5)
+    plt.xticks([-2, 0, 2])
+    plt.yticks([-2, 0, 2])
+    ax1.contourf(xx, yy, Z, cmap=cmap, alpha=0.2)
+    ax1.scatter(points[:, 0], points[:, 1], s=10, c=labels, cmap=cmap, alpha=0.8, )
     # plt.colorbar(ticks=np.arange(num_classes))
+
     if title is not None:
-        plt.title(title)
-    plt.show()
+        ax1.set_title(title)
+    if fname is not None:
+        fig1.savefig(f'{fname}.png')
+    fig1.show()
 
 
 def train(epoch, model, dataloader, optimizer, loss_fn, conf_ratio=0.0, info_ratio=0.0):
@@ -94,13 +103,13 @@ def hungarian_test(model, dataloader):
     target_probs, probs = torch.cat(target_probs).numpy(), torch.cat(probs).numpy()
 
     # compute the negative dot product between A and B
-    cost = -probs.T @ target_probs
+    cost = -target_probs.T @ probs
 
     # solve the assignment problem using the Hungarian algorithm
     # row_ind and col_ind contain the indices of the matched elements
     row_ind, col_ind = linear_sum_assignment(cost)
 
-    targets, estimates = target_probs.argmax(axis=1), col_ind[probs.argmax(axis=1)]
+    targets, estimates = col_ind[target_probs.argmax(axis=1)], probs.argmax(axis=1)
 
     acc = (targets == estimates).mean()
     return acc
@@ -135,17 +144,18 @@ if __name__ == '__main__':
     optimizer = optim.SGD(classifier.parameters(), lr=0.2)
 
     acc = hungarian_test(classifier, dataloader)
-    plot_decision_boundary(dataset.points, dataset.labels, classifier, title=f'init classifier, acc: {acc:.1%}')
+    plot_decision_boundary(dataset.points, dataset.labels, classifier,
+                           title=f'init classifier, acc: {acc:.1%}', fname='init')
 
     for epoch in range(1, 10 + 1):
-        # loss = train(epoch, classifier, dataloader, optimizer,
-        #              loss_fn=lambda input, target: F.nll_loss(torch.log(input), target.argmax(dim=1)))
+        loss = train(epoch, classifier, dataloader, optimizer, loss_fn=ce_loss)
+        # loss = train(epoch, classifier, dataloader, optimizer, loss_fn=matching_ce_loss)
         # loss = train(epoch, classifier, dataloader, optimizer, loss_fn=BatchSimLoss(normalize=False), info_ratio=1)
-        loss = train(epoch, classifier, dataloader, optimizer, loss_fn=BatchSimLoss(normalize=True), info_ratio=1)
+        # loss = train(epoch, classifier, dataloader, optimizer, loss_fn=BatchSimLoss(normalize=True), info_ratio=1)
 
         acc = hungarian_test(classifier, dataloader)
         plot_decision_boundary(dataset.points, dataset.labels, classifier,
-                               title=f'epoch: {epoch}, loss: {loss:.3f}, acc: {acc:.1%}')
+                               title=f'epoch: {epoch}, acc: {acc:.1%}', fname=f'epoch{epoch:02d}')
 
     acc = hungarian_test(classifier, dataloader)
     plot_decision_boundary(dataset.points, dataset.labels, classifier, title=f'final classifier, acc: {acc:.1%}')
