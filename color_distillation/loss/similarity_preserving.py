@@ -1,7 +1,28 @@
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 import torch
 from torch import nn
 import torch.nn.functional as F
+
+
+def ce_loss(probs, target_probs):
+    return F.nll_loss(torch.log(probs), target_probs.argmax(dim=1))
+
+
+def matching_ce_loss(probs, target_probs):
+    if len(probs.shape) == 4:
+        B, C, H, W = probs.shape
+        probs, target_probs = probs.permute([0, 2, 3, 1]).reshape([-1, C]), \
+            target_probs.permute([0, 2, 3, 1]).reshape([-1, C])
+    # compute the negative dot product between A and B
+    cost = -target_probs.T @ probs
+
+    # solve the assignment problem using the Hungarian algorithm
+    # row_ind and col_ind contain the indices of the matched elements
+    row_ind, col_ind = linear_sum_assignment(cost.detach().cpu().numpy())
+    col_ind = torch.tensor(col_ind, dtype=torch.long, device=probs.device)
+
+    return F.nll_loss(torch.log(probs), col_ind[target_probs.argmax(axis=1)])
 
 
 class BatchSimLoss(nn.Module):
