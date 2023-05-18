@@ -55,6 +55,8 @@ def main(args):
     else:
         raise Exception
 
+    args.cluster_loss = None
+
     # dataset
     data_path = os.path.expanduser('~/Data/') + args.dataset
     base_lr_ratio = 1
@@ -161,10 +163,10 @@ def main(args):
 
     og_train_loader = DataLoader(og_train_set, batch_size=args.batch_size, shuffle=True,
                                  num_workers=args.num_workers, pin_memory=True)
-    og_test_loader = DataLoader(og_test_set, batch_size=args.batch_size * 2,
+    og_test_loader = DataLoader(og_test_set, batch_size=args.batch_size,
                                 # sampler=RandomSeqSampler(og_test_set),
                                 num_workers=args.num_workers, pin_memory=True)
-    sampled_test_loader = DataLoader(sampled_test_set, batch_size=args.batch_size * 2,
+    sampled_test_loader = DataLoader(sampled_test_set, batch_size=args.batch_size,
                                      # sampler=RandomSeqSampler(og_test_set),
                                      num_workers=args.num_workers, pin_memory=True)
 

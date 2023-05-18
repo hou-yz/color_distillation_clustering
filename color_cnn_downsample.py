@@ -51,7 +51,7 @@ def main(args):
         pixsim_sample = 0.3
         img_size = 32
 
-        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ColorJitter(0.4, 0.4, 0.4, 0.1)])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), ])
         test_trans = T.Compose([])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(32, padding=4),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
@@ -59,38 +59,38 @@ def main(args):
         if args.dataset == 'cifar10':
             train_set = datasets.CIFAR10(data_path, train=True, download=True, transform=train_trans,
                                          color_quantize=T.MedianCut())
-            test_set = datasets.CIFAR10(data_path, train=False, download=True, transform=test_trans)
+            test_set = datasets.CIFAR10(data_path, train=False, download=True, transform=test_trans,
+                                        color_quantize=T.MedianCut())
         else:
             train_set = datasets.CIFAR100(data_path, train=True, download=True, transform=train_trans,
                                           color_quantize=T.MedianCut())
-            test_set = datasets.CIFAR100(data_path, train=False, download=True, transform=test_trans)
+            test_set = datasets.CIFAR100(data_path, train=False, download=True, transform=test_trans,
+                                         color_quantize=T.MedianCut())
     elif args.dataset == 'imagenet':
         num_class = 1000
         pixsim_sample = 0.1
         img_size = 224
 
-        train_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.RandomHorizontalFlip(),
-                                 T.ColorJitter(0.4, 0.4, 0.4, 0.1)])
+        train_trans = T.Compose([T.Resize(256), T.CenterCrop(224), T.RandomHorizontalFlip(), ])
         test_trans = T.Compose([T.Resize(256), T.CenterCrop(224), ])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(224, padding=28),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.ImageNet(data_path, split='train', transform=train_trans, color_quantize=T.MedianCut())
-        test_set = datasets.ImageNet(data_path, split='val', transform=test_trans)
+        test_set = datasets.ImageNet(data_path, split='val', transform=test_trans, color_quantize=T.MedianCut())
     elif args.dataset == 'style14mini':
         num_class = 14
         args.batch_size = 32
         pixsim_sample = 0.3
         img_size = 112
 
-        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(),
-                                 T.ColorJitter(0.4, 0.4, 0.4, 0.1)])
+        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(), ])
         test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), ])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(112, padding=14),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
-        test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
+        test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans, color_quantize=T.MedianCut())
     elif args.dataset == 'stl10':
         num_class = 10
         # smaller batch size
@@ -98,26 +98,27 @@ def main(args):
         pixsim_sample = 0.3
         img_size = 96
 
-        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ColorJitter(0.4, 0.4, 0.4, 0.1)])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), ])
         test_trans = T.Compose([])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(96, padding=12),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.STL10(data_path, split='train', download=True, transform=train_trans,
                                    color_quantize=T.MedianCut())
-        test_set = datasets.STL10(data_path, split='test', download=True, transform=test_trans)
+        test_set = datasets.STL10(data_path, split='test', download=True, transform=test_trans,
+                                  color_quantize=T.MedianCut())
     elif args.dataset == 'tiny200':
         num_class = 200
         pixsim_sample = 0.3
         img_size = 64
 
-        train_trans = T.Compose([T.RandomHorizontalFlip(), T.ColorJitter(0.4, 0.4, 0.4, 0.1)])
+        train_trans = T.Compose([T.RandomHorizontalFlip(), ])
         test_trans = T.Compose([])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(64, padding=8),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.ImageFolder(data_path + '/train', transform=train_trans, color_quantize=T.MedianCut())
-        test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans)
+        test_set = datasets.ImageFolder(data_path + '/val', transform=test_trans, color_quantize=T.MedianCut())
     elif args.dataset == 'voc_cls':
         num_class = 20
         args.batch_size = 32
@@ -128,15 +129,15 @@ def main(args):
         data_path = os.path.expanduser('~/Data/pascal_VOC')
         img_size = 112
 
-        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(),
-                                 T.ColorJitter(0.4, 0.4, 0.4, 0.1)])
+        train_trans = T.Compose([T.Resize(128), T.CenterCrop(112), T.RandomHorizontalFlip(), ])
         test_trans = T.Compose([T.Resize(128), T.CenterCrop(112), ])
         train_post_trans = T.Compose([T.RandomHorizontalFlip(), T.RandomCrop(112, padding=14),
                                       T.RandomRotation(degrees=15), T.RandomErasing()])
 
         train_set = datasets.VOCClassification(data_path, image_set='train', transform=train_trans,
                                                color_quantize=T.MedianCut())
-        test_set = datasets.VOCClassification(data_path, image_set='val', transform=test_trans)
+        test_set = datasets.VOCClassification(data_path, image_set='val', transform=test_trans,
+                                              color_quantize=T.MedianCut())
     elif args.dataset == 'voc_seg':
         num_class = 21
         # args.lr = 0.001
@@ -149,8 +150,7 @@ def main(args):
         img_size = 160
 
         data_path = os.path.expanduser('~/Data/pascal_VOC')
-        train_trans = exT.ExtCompose([exT.ExtResize(crop_size), exT.ExtRandomHorizontalFlip(),
-                                      exT.ExtColorJitter(0.4, 0.4, 0.4, 0.1)])
+        train_trans = exT.ExtCompose([exT.ExtResize(crop_size), exT.ExtRandomHorizontalFlip(), ])
         test_trans = exT.ExtCompose([exT.ExtResize(crop_size), ])
         train_post_trans = exT.ExtCompose([exT.ExtRandomHorizontalFlip(), exT.ExtRandomScale([0.5, 2.0]),
                                            exT.ExtRandomCrop(size=crop_size, pad_if_needed=True),
@@ -158,7 +158,8 @@ def main(args):
 
         train_set = datasets.VOCSegmentation(data_path, image_set='train', transforms=train_trans,
                                              color_quantize=T.MedianCut())
-        test_set = datasets.VOCSegmentation(data_path, image_set='val', transforms=test_trans)
+        test_set = datasets.VOCSegmentation(data_path, image_set='val', transforms=test_trans,
+                                            color_quantize=T.MedianCut())
     else:
         raise Exception
 
@@ -170,11 +171,10 @@ def main(args):
     kwargs = {'prefetch_factor': 1} if args.num_workers else {}
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True,
                               num_workers=args.num_workers, pin_memory=True, **kwargs)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size * 2,
-                             # sampler=RandomSeqSampler(test_set),
-                             num_workers=args.num_workers, pin_memory=True)
+    test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True,
+                             sampler=RandomSeqSampler(test_set) if args.dataset == 'style14mini' else None)
 
-    logdir = f'{"debug_" if is_debug else ""}' \
+    logdir = f'{"DEBUG_" if is_debug else ""}' \
              f'{args.backbone}_agg{args.agg}_neck{args.bottleneck_channel}_colors{args.colors_channel}_topk{args.topk}_' \
              f'ce{args.ce_ratio}_kd{args.kd_ratio}_{args.cluster_loss}{args.pixsim_ratio}_sample{pixsim_sample}_recons{args.recons_ratio}_' \
              f'prcp{args.perceptual_ratio}_max{args.colormax_ratio}_conf{args.conf_ratio}_info{args.info_ratio}_' \
@@ -212,7 +212,7 @@ def main(args):
 
     model = ColorCNN(args.backbone, args.temperature, args.bottleneck_channel, args.colors_channel,
                      args.topk, args.agg).cuda()
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, args.step_size, 1)
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
@@ -234,6 +234,7 @@ def main(args):
         else:
             for i in range(1, int(np.log2(-args.num_colors)) + 1):
                 n_colors = 2 ** i
+                test_set.num_colors[0] = n_colors
                 print(f'Testing {n_colors} colors on {arch}...')
                 trainer.test(arch, test_loader, n_colors, epoch=epoch, visualize=args.visualize, test_mode=test_mode)
 
@@ -264,20 +265,20 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ColorCNN down sample')
     parser.add_argument('--num_colors', type=int, default=-64)
     parser.add_argument('--bottleneck_channel', type=int, default=16)
-    parser.add_argument('--colors_channel', type=int, default=1024)
+    parser.add_argument('--colors_channel', type=int, default=256)
     parser.add_argument('--topk', type=int, default=4)
     parser.add_argument('--mode', type=str, default='classify', choices=['cluster', 'classify'])
-    parser.add_argument('--cluster_loss', type=str, default='pixsim', choices=['pixsim', 'pixbce', 'ce'])
+    parser.add_argument('--cluster_loss', type=str, default='pixsim', choices=['pixsim', 'pixbce', 'ce', 'matchce'])
     parser.add_argument('--agg', type=str, default='mean', choices=['mean', 'max'])
     parser.add_argument('--ce_ratio', type=float, default=1.0, help='cross entropy loss')
     parser.add_argument('--kd_ratio', type=float, default=0.0, help='knowledge distillation loss')
-    parser.add_argument('--perceptual_ratio', type=float, default=0.0, help='perceptual loss')
-    parser.add_argument('--colormax_ratio', type=float, default=1.0, help='ensure all colors present')
+    parser.add_argument('--perceptual_ratio', type=float, default=1.0, help='perceptual loss')
+    parser.add_argument('--colormax_ratio', type=float, default=0.1, help='ensure all colors present')
     parser.add_argument('--pixsim_ratio', type=float, default=3.0, help='similarity towards the KMeans result')
     parser.add_argument('--recons_ratio', type=float, default=0.0, help='reconstruction loss')
     parser.add_argument('--conf_ratio', type=float, default=0.0,
                         help='softmax more like argmax (one-hot), reduce entropy of per-pixel color distribution')
-    parser.add_argument('--info_ratio', type=float, default=1.0,
+    parser.add_argument('--info_ratio', type=float, default=0.1,
                         help='even distribution among all colors, increase entropy of entire-image color distribution')
     parser.add_argument('--color_jitter', type=float, default=1.0)
     parser.add_argument('--color_norm', type=float, default=4.0, help='normalizer for color palette')
@@ -288,19 +289,17 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--dataset', type=str, default='cifar10',
                         choices=['cifar10', 'cifar100', 'stl10', 'style14mini', 'imagenet', 'tiny200',
                                  'voc_cls', 'voc_seg'])
-    parser.add_argument('-a', '--arch', type=str, default='vgg16', choices=list(models.names()).extend('all'))
+    parser.add_argument('-a', '--arch', type=str, default='all', choices=list(models.names()).extend('all'))
     parser.add_argument('-j', '--num_workers', type=int, default=4)
     parser.add_argument('-b', '--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train')
     parser.add_argument('--step_size', type=int, default=20, help='step_size for training')
     parser.add_argument('--task_update', type=int, default=20, help='task_update (num of batches) for training')
-    parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
-    parser.add_argument('--weight_decay', type=float, default=5e-4)
-    parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum')
+    parser.add_argument('--lr', type=float, default=5e-3, help='learning rate')
     parser.add_argument('--log_interval', type=int, default=1000,
                         help='how many batches to wait before logging training status')
     parser.add_argument('--backbone', type=str, default='unet',
-                        choices=['unet', 'unext', 'dncnn', 'cyclegan', 'styleunet'])
+                        choices=['unet', 'unext', 'dncnn', 'cyclegan', 'styleunet', 'none'])
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--deterministic', action='store_true')
