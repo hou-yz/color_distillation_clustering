@@ -131,14 +131,17 @@ class ColorCNN(nn.Module):
             self.base = GeneratorResNet()
         elif arch == 'styleunet':
             self.base = StyleUNet()
+        elif arch == 'none':
+            self.base = nn.Identity()
         else:
             raise Exception
+        out_channel = self.base.out_channel if arch != 'none' else 3
         if bottleneck_channel != 0:
-            self.bottleneck = nn.Sequential(nn.Conv2d(self.base.out_channel, bottleneck_channel, 1),
+            self.bottleneck = nn.Sequential(nn.Conv2d(out_channel, bottleneck_channel, 1),
                                             nn.BatchNorm2d(bottleneck_channel), nn.ReLU(), )
         else:
             self.bottleneck = nn.Sequential()
-            bottleneck_channel = self.base.out_channel
+            bottleneck_channel = out_channel
         # support color quantization into 256 colors at most
         # self.color_mask = nn.Parameter(torch.randn([bottleneck_channel, colors_channel]))
         self.color_mask = nn.Conv2d(bottleneck_channel, colors_channel, 1, bias=False)
@@ -172,9 +175,9 @@ class ColorCNN(nn.Module):
         # color_palette = color_palette[:, :, :, None, None]
         # m = F.softmax(m / self.temp, dim=1)
         topk, idx = torch.topk(m, min(self.topk, num_colors), dim=1)
-        m = torch.scatter(torch.zeros_like(m), 1, idx, F.softmax(topk / self.temp, dim=1))  # softmax output
-        color_palette = (img.unsqueeze(2) * m.unsqueeze(1)).sum(dim=[3, 4], keepdim=True) / (
-                m.unsqueeze(1).sum(dim=[3, 4], keepdim=True) + 1e-8)
+        m = torch.scatter(torch.zeros_like(m), 1, idx, F.softmax(topk / self.temp, dim=1)) + 1e-16  # softmax output
+        color_palette = (img.unsqueeze(2) * m.unsqueeze(1)).sum(dim=[3, 4], keepdim=True) / \
+                        m.unsqueeze(1).sum(dim=[3, 4], keepdim=True)
         if mode == 'train':
             transformed_img = (m.unsqueeze(1) * color_palette).sum(dim=2)
         else:
